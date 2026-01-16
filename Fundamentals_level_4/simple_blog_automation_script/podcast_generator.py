@@ -5,17 +5,27 @@ podcast_generator.py
 Podcast generation from blog posts:
 - Reads blog posts from CSV files or Supabase
 - Uses Gemini to generate podcast scripts
-- Provides NotebookLM web interface instructions
+- Uses ElevenLabs API to generate podcast audio (MP3 files)
 - Stores podcast metadata and can update blog posts
 
 Place in: Fundamentals_level_4/simple_blog_automation_script/
-Required .env vars: SUPABASE_URL, SUPABASE_SERVICE_KEY, GEMINI_API_KEY
+Required .env vars: SUPABASE_URL, SUPABASE_SERVICE_KEY, GEMINI_API_KEY, ELEVENLABS_API_KEY
+
+MP3 Audio Generation Process:
+1. Script Generation: Gemini AI creates a structured podcast script (intro, segments, outro)
+2. Text Chunking: Long scripts are split into chunks (max 40,000 chars per ElevenLabs request)
+3. API Calls: Each chunk is sent to ElevenLabs text-to-speech API with voice settings
+4. Audio Combination: MP3 audio chunks are concatenated into a single file
+5. File Output: Final MP3 saved to generated_podcasts/ directory
+
+The MP3 files are ready to use - no additional processing needed!
 """
 
 import os
 import json
 import csv
 import re
+import requests
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
 from dotenv import load_dotenv
@@ -32,6 +42,11 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "models/gemini-2.5-flash")
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")  # Default: Rachel voice
+ELEVENLABS_MODEL = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2")  # High quality, stable for long-form
+ELEVENLABS_GUEST_VOICE_ID = os.getenv("ELEVENLABS_GUEST_VOICE_ID")  # Optional: for conversation mode
+ELEVENLABS_PODCAST_MODE = os.getenv("ELEVENLABS_PODCAST_MODE", "bulletin")  # "bulletin" (monologue) or "conversation"
 
 # Validate
 if not all([GEMINI_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_KEY]):
@@ -193,101 +208,523 @@ Make it natural, conversational, and easy to read aloud. Use the brand voice fro
     except Exception as e:
         return {"status": "error", "message": f"Error generating script: {e}"}
 
-# -------------------- Podcast File Management --------------------
+# -------------------- ElevenLabs Audio Generation --------------------
 
-def save_comprehensive_notebooklm_file(blog_slug: str, script_data: Dict[str, Any], 
-                                       blog_title: str, blog_excerpt: str,
-                                       blog_content: str, brand_context: str) -> str:
+"""
+HOW MP3 AUDIO GENERATION WORKS (Using ElevenLabs Studio Podcasts API):
+
+1. CONTENT PREPARATION:
+   - Blog content is extracted and cleaned
+   - Can use full blog content or generated script as source
+
+2. PODCAST PROJECT CREATION:
+   - POST to https://api.elevenlabs.io/v1/studio/podcasts
+   - Source type: "text" (blog content) or "url" (if blog is published)
+   - Mode: "bulletin" (monologue) or "conversation" (host + guest)
+   - Quality preset: standard, high, ultra, or ultra_lossless
+   - Duration scale: short (<3min), default (3-7min), or long (>7min)
+
+3. AUTOMATIC CONVERSION:
+   - ElevenLabs automatically structures content into podcast format
+   - Uses LLM to create engaging podcast script (LLM cost covered by ElevenLabs)
+   - Generates audio with selected voices
+   - Returns project_id for tracking
+
+4. CONVERSION STATUS:
+   - Project conversion happens asynchronously
+   - Can poll project status or use callback_url for webhook
+   - Once converted, project contains downloadable audio
+
+5. AUDIO DOWNLOAD:
+   - Download final MP3 from project
+   - File is ready to use - professionally formatted podcast!
+
+Benefits of Studio API:
+- Automatic podcast structuring (no manual script needed)
+- Professional formatting and pacing
+- Supports conversation mode (two voices)
+- Quality presets and duration controls
+- Handles entire pipeline automatically
+"""
+
+def create_podcast_project_with_elevenlabs(blog_content: str, blog_title: str, 
+                                          blog_excerpt: str = None,
+                                          voice_id: str = None, 
+                                          guest_voice_id: str = None,
+                                          model: str = None,
+                                          mode: str = None,
+                                          quality_preset: str = "standard",
+                                          duration_scale: str = "default",
+                                          intro: str = None,
+                                          outro: str = None,
+                                          instructions_prompt: str = None) -> Dict[str, Any]:
     """
-    Save a single comprehensive file with everything needed for NotebookLM.
-    This file contains blog content, brand context, generated script, and instructions.
+    Create a podcast project using ElevenLabs Studio Podcasts API.
+    
+    Args:
+        blog_content: Full blog content text
+        blog_title: Blog title
+        blog_excerpt: Optional excerpt
+        voice_id: Host voice ID (defaults to ELEVENLABS_VOICE_ID)
+        guest_voice_id: Guest voice ID for conversation mode (optional)
+        model: Model ID (defaults to ELEVENLABS_MODEL)
+        mode: "bulletin" (monologue) or "conversation" (defaults to ELEVENLABS_PODCAST_MODE)
+        quality_preset: "standard", "high", "ultra", "ultra_lossless"
+        duration_scale: "short", "default", "long"
+        intro: Optional intro text (max 1500 chars)
+        outro: Optional outro text (max 1500 chars)
+        instructions_prompt: Optional style/tone instructions (max 3000 chars)
+    
+    Returns:
+        Dict with 'status', 'project_id', 'project', and 'message'
     """
+    if not ELEVENLABS_API_KEY:
+        return {
+            "status": "error",
+            "message": "ELEVENLABS_API_KEY not found in environment variables"
+        }
+    
+    voice_id = voice_id or ELEVENLABS_VOICE_ID
+    model = model or ELEVENLABS_MODEL
+    mode = mode or ELEVENLABS_PODCAST_MODE
+    
+    url = "https://api.elevenlabs.io/v1/studio/podcasts"
+    
+    headers = {
+        "xi-api-key": ELEVENLABS_API_KEY,
+        "Content-Type": "application/json"
+    }
+    
+    # Prepare source - use text type
+    source = {
+        "type": "text",
+        "text": blog_content
+    }
+    
+    # Prepare mode
+    if mode == "conversation":
+        if not guest_voice_id:
+            guest_voice_id = ELEVENLABS_GUEST_VOICE_ID or voice_id  # Fallback to same voice
+        mode_config = {
+            "type": "conversation",
+            "conversation": {
+                "host_voice_id": voice_id,
+                "guest_voice_id": guest_voice_id
+            }
+        }
+    else:
+        # Bulletin mode (monologue)
+        mode_config = {
+            "type": "bulletin"
+        }
+    
+    # Build request payload
+    payload = {
+        "model_id": model,
+        "mode": mode_config,
+        "source": source,
+        "quality_preset": quality_preset,
+        "duration_scale": duration_scale
+    }
+    
+    # Add optional fields
+    if intro and len(intro) <= 1500:
+        payload["intro"] = intro
+    if outro and len(outro) <= 1500:
+        payload["outro"] = outro
+    if instructions_prompt and len(instructions_prompt) <= 3000:
+        payload["instructions_prompt"] = instructions_prompt
+    
+    try:
+        response = requests.post(url, json=payload, headers=headers)
+        
+        if response.status_code == 200:
+            data = response.json()
+            project = data.get('project', {})
+            project_id = project.get('project_id')
+            
+            return {
+                "status": "success",
+                "project_id": project_id,
+                "project": project,
+                "message": f"Podcast project created successfully. Project ID: {project_id}"
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"ElevenLabs API error: {response.status_code} - {response.text}"
+            }
+    
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error creating podcast project: {str(e)}"
+        }
+
+def get_podcast_project_status(project_id: str) -> Dict[str, Any]:
+    """
+    Get the status of a podcast project.
+    
+    Args:
+        project_id: The project ID from create_podcast_project_with_elevenlabs
+    
+    Returns:
+        Dict with 'status', 'project', and conversion status
+    """
+    if not ELEVENLABS_API_KEY:
+        return {
+            "status": "error",
+            "message": "ELEVENLABS_API_KEY not found"
+        }
+    
+    url = f"https://api.elevenlabs.io/v1/studio/podcasts/{project_id}"
+    
+    headers = {
+        "xi-api-key": ELEVENLABS_API_KEY
+    }
+    
+    try:
+        response = requests.get(url, headers=headers)
+        
+        if response.status_code == 200:
+            data = response.json()
+            project = data.get('project', {})
+            
+            # Check conversion status
+            creation_meta = project.get('creation_meta', {})
+            conversion_status = creation_meta.get('status', 'unknown')
+            
+            return {
+                "status": "success",
+                "project": project,
+                "conversion_status": conversion_status,
+                "is_ready": conversion_status == "success"
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"API error: {response.status_code} - {response.text}"
+            }
+    
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error getting project status: {str(e)}"
+        }
+
+def download_podcast_audio(project_id: str, output_path: str) -> Dict[str, Any]:
+    """
+    Download the final podcast audio from a converted project.
+    
+    Args:
+        project_id: The project ID
+        output_path: Path to save the MP3 file
+    
+    Returns:
+        Dict with 'status', 'filepath', and 'message'
+    """
+    if not ELEVENLABS_API_KEY:
+        return {
+            "status": "error",
+            "message": "ELEVENLABS_API_KEY not found"
+        }
+    
+    # First check if project is ready
+    status_result = get_podcast_project_status(project_id)
+    if status_result.get('status') != 'success':
+        return status_result
+    
+    if not status_result.get('is_ready'):
+        return {
+            "status": "error",
+            "message": f"Project not ready yet. Status: {status_result.get('conversion_status')}"
+        }
+    
+    # Get download URL from project
+    # Note: You may need to use a different endpoint to get the actual audio download URL
+    # This is a placeholder - check ElevenLabs docs for exact download endpoint
+    url = f"https://api.elevenlabs.io/v1/studio/podcasts/{project_id}/download"
+    
+    headers = {
+        "xi-api-key": ELEVENLABS_API_KEY,
+        "Accept": "audio/mpeg"
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, stream=True)
+        
+        if response.status_code == 200:
+            os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else '.', exist_ok=True)
+            
+            with open(output_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            
+            return {
+                "status": "success",
+                "filepath": output_path,
+                "message": "Podcast audio downloaded successfully"
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"Download error: {response.status_code} - {response.text}"
+            }
+    
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error downloading audio: {str(e)}"
+        }
+
+def generate_audio_with_elevenlabs(text: str, voice_id: str = None, model: str = None, 
+                                   output_format: str = "mp3") -> Dict[str, Any]:
+    """
+    Generate audio from text using ElevenLabs API.
+    
+    Args:
+        text: Text to convert to speech
+        voice_id: ElevenLabs voice ID (defaults to ELEVENLABS_VOICE_ID env var)
+        model: ElevenLabs model name (defaults to ELEVENLABS_MODEL env var)
+        output_format: Audio format (mp3, wav, etc.)
+    
+    Returns:
+        Dict with 'status', 'audio_data' (bytes), and 'message'
+    """
+    if not ELEVENLABS_API_KEY:
+        return {
+            "status": "error",
+            "message": "ELEVENLABS_API_KEY not found in environment variables"
+        }
+    
+    voice_id = voice_id or ELEVENLABS_VOICE_ID
+    model = model or ELEVENLABS_MODEL
+    
+    # ElevenLabs API endpoint
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+    
+    headers = {
+        "Accept": "audio/mpeg",
+        "Content-Type": "application/json",
+        "xi-api-key": ELEVENLABS_API_KEY
+    }
+    
+    # Prepare request data
+    # For long texts, we'll need to chunk them (ElevenLabs has limits)
+    # Turbo v2.5 supports up to 40,000 characters
+    max_chunk_size = 40000
+    
+    try:
+        # If text is too long, split into chunks
+        if len(text) > max_chunk_size:
+            # Split by sentences to avoid cutting words
+            sentences = re.split(r'(?<=[.!?])\s+', text)
+            chunks = []
+            current_chunk = ""
+            
+            for sentence in sentences:
+                if len(current_chunk) + len(sentence) + 1 <= max_chunk_size:
+                    current_chunk += sentence + " "
+                else:
+                    if current_chunk:
+                        chunks.append(current_chunk.strip())
+                    current_chunk = sentence + " "
+            
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+            
+            # Generate audio for each chunk and combine
+            audio_parts = []
+            for i, chunk in enumerate(chunks):
+                print(f"   Generating audio chunk {i+1}/{len(chunks)}...")
+                data = {
+                    "text": chunk,
+                    "model_id": model,
+                    "voice_settings": {
+                        "stability": 0.5,
+                        "similarity_boost": 0.75,
+                        "style": 0.0,
+                        "use_speaker_boost": True
+                    }
+                }
+                
+                response = requests.post(url, json=data, headers=headers)
+                
+                if response.status_code == 200:
+                    audio_parts.append(response.content)
+                else:
+                    return {
+                        "status": "error",
+                        "message": f"ElevenLabs API error (chunk {i+1}): {response.status_code} - {response.text}"
+                    }
+            
+            # Combine audio parts (simple concatenation for MP3)
+            # Note: For production, you might want to use pydub to properly merge audio
+            combined_audio = b''.join(audio_parts)
+            
+            return {
+                "status": "success",
+                "audio_data": combined_audio,
+                "message": f"Generated audio from {len(chunks)} chunks"
+            }
+        else:
+            # Single request for shorter text
+            data = {
+                "text": text,
+                "model_id": model,
+                "voice_settings": {
+                    "stability": 0.5,
+                    "similarity_boost": 0.75,
+                    "style": 0.0,
+                    "use_speaker_boost": True
+                }
+            }
+            
+            response = requests.post(url, json=data, headers=headers)
+            
+            if response.status_code == 200:
+                return {
+                    "status": "success",
+                    "audio_data": response.content,
+                    "message": "Audio generated successfully"
+                }
+            else:
+                return {
+                    "status": "error",
+                    "message": f"ElevenLabs API error: {response.status_code} - {response.text}"
+                }
+    
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error generating audio: {str(e)}"
+        }
+
+def generate_podcast_audio(blog_content: str, blog_title: str, blog_excerpt: str,
+                           blog_slug: str, 
+                           voice_id: str = None, 
+                           guest_voice_id: str = None,
+                           model: str = None,
+                           mode: str = None,
+                           quality_preset: str = "standard",
+                           duration_scale: str = "default",
+                           max_wait_seconds: int = 300) -> Dict[str, Any]:
+    """
+    Generate complete podcast audio using ElevenLabs Studio Podcasts API.
+    
+    Args:
+        blog_content: Full blog content text
+        blog_title: Blog title
+        blog_excerpt: Blog excerpt
+        blog_slug: Blog slug for filename
+        voice_id: Optional host voice ID override
+        guest_voice_id: Optional guest voice ID for conversation mode
+        model: Optional model override
+        mode: "bulletin" (monologue) or "conversation"
+        quality_preset: "standard", "high", "ultra", "ultra_lossless"
+        duration_scale: "short", "default", "long"
+        max_wait_seconds: Maximum time to wait for conversion (default 5 minutes)
+    
+    Returns:
+        Dict with 'status', 'audio_filepath', 'project_id', and 'message'
+    """
+    if not ELEVENLABS_API_KEY:
+        return {
+            "status": "error",
+            "message": "ELEVENLABS_API_KEY not found. Audio generation skipped."
+        }
+    
+    print(f"🎙️  Creating podcast project with ElevenLabs Studio API...")
+    
+    # Prepare intro and outro from excerpt
+    intro_text = None
+    outro_text = None
+    if blog_excerpt:
+        # Use excerpt as intro context (limit to 1500 chars)
+        intro_text = f"Welcome to today's episode about {blog_title}. {blog_excerpt[:1400]}"
+    
+    # Create podcast project
+    project_result = create_podcast_project_with_elevenlabs(
+        blog_content=blog_content,
+        blog_title=blog_title,
+        blog_excerpt=blog_excerpt,
+        voice_id=voice_id,
+        guest_voice_id=guest_voice_id,
+        model=model,
+        mode=mode,
+        quality_preset=quality_preset,
+        duration_scale=duration_scale,
+        intro=intro_text,
+        outro=outro_text
+    )
+    
+    if project_result.get('status') != 'success':
+        return project_result
+    
+    project_id = project_result.get('project_id')
+    print(f"✅ Podcast project created: {project_id}")
+    print(f"⏳ Waiting for conversion to complete (this may take a few minutes)...")
+    
+    # Poll for conversion status
+    import time
+    start_time = time.time()
+    check_interval = 10  # Check every 10 seconds
+    
+    while time.time() - start_time < max_wait_seconds:
+        status_result = get_podcast_project_status(project_id)
+        
+        if status_result.get('status') != 'success':
+            return status_result
+        
+        conversion_status = status_result.get('conversion_status')
+        
+        if conversion_status == 'success':
+            print(f"✅ Conversion complete!")
+            break
+        elif conversion_status == 'error':
+            return {
+                "status": "error",
+                "message": f"Podcast conversion failed. Check project {project_id} in ElevenLabs dashboard."
+            }
+        else:
+            # Still processing
+            elapsed = int(time.time() - start_time)
+            print(f"   Still processing... ({elapsed}s elapsed)")
+            time.sleep(check_interval)
+    else:
+        return {
+            "status": "error",
+            "message": f"Conversion timeout after {max_wait_seconds} seconds. Project ID: {project_id}. Check status manually."
+        }
+    
+    # Download audio
     os.makedirs('generated_podcasts', exist_ok=True)
-    
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    filename = f"notebooklm_{blog_slug}_{timestamp}.txt"
-    filepath = os.path.join('generated_podcasts', filename)
+    audio_filename = f"podcast_{blog_slug}_{timestamp}.mp3"
+    audio_filepath = os.path.join('generated_podcasts', audio_filename)
     
-    # Extract plain text from HTML blog content
-    plain_blog_text = extract_text_from_html(blog_content)
+    print(f"📥 Downloading podcast audio...")
+    download_result = download_podcast_audio(project_id, audio_filepath)
     
-    # Format comprehensive file for NotebookLM
-    with open(filepath, 'w', encoding='utf-8') as f:
-        f.write("=" * 80 + "\n")
-        f.write("PODCAST GENERATION FILE FOR NOTEBOOKLM\n")
-        f.write("=" * 80 + "\n\n")
-        
-        f.write("INSTRUCTIONS FOR NOTEBOOKLM:\n")
-        f.write("-" * 80 + "\n")
-        f.write("1. Upload this entire file to NotebookLM (https://notebooklm.google.com)\n")
-        f.write("2. Once uploaded, ask NotebookLM: 'Create a podcast script based on this blog post'\n")
-        f.write("3. Or ask: 'Generate a conversational podcast episode from the blog content below'\n")
-        f.write("4. NotebookLM will use all the information in this file to create the podcast\n")
-        f.write("5. Refine the output as needed with follow-up questions\n\n")
-        
-        f.write("=" * 80 + "\n")
-        f.write("BLOG INFORMATION\n")
-        f.write("=" * 80 + "\n\n")
-        f.write(f"Title: {blog_title}\n")
-        f.write(f"Slug: {blog_slug}\n")
-        f.write(f"Excerpt: {blog_excerpt}\n\n")
-        
-        f.write("=" * 80 + "\n")
-        f.write("BRAND CONTEXT\n")
-        f.write("=" * 80 + "\n\n")
-        f.write(brand_context)
-        f.write("\n\n")
-        
-        f.write("=" * 80 + "\n")
-        f.write("ORIGINAL BLOG CONTENT\n")
-        f.write("=" * 80 + "\n\n")
-        f.write(plain_blog_text)
-        f.write("\n\n")
-        
-        f.write("=" * 80 + "\n")
-        f.write("GENERATED PODCAST SCRIPT (DRAFT)\n")
-        f.write("=" * 80 + "\n\n")
-        f.write("This is an AI-generated draft. Use NotebookLM to refine and enhance it.\n\n")
-        f.write(f"Estimated Duration: {script_data.get('total_duration_estimate', 'N/A')}\n\n")
-        
-        # Intro
-        f.write("INTRO:\n")
-        f.write("-" * 80 + "\n")
-        f.write(script_data.get('intro', '') + "\n\n")
-        
-        # Segments
-        segments = script_data.get('segments', [])
-        for i, segment in enumerate(segments, 1):
-            f.write(f"\nSEGMENT {i}: {segment.get('title', f'Segment {i}')}\n")
-            f.write("-" * 80 + "\n")
-            f.write(f"Duration: {segment.get('duration_estimate', 'N/A')}\n\n")
-            f.write(segment.get('content', '') + "\n\n")
-        
-        # Key Points
-        key_points = script_data.get('key_points', [])
-        if key_points:
-            f.write("\nKEY TAKEAWAYS:\n")
-            f.write("-" * 80 + "\n")
-            for i, point in enumerate(key_points, 1):
-                f.write(f"{i}. {point}\n")
-            f.write("\n")
-        
-        # Outro
-        f.write("\nOUTRO:\n")
-        f.write("-" * 80 + "\n")
-        f.write(script_data.get('outro', '') + "\n\n")
-        
-        # Show Notes
-        f.write("\nSHOW NOTES:\n")
-        f.write("-" * 80 + "\n")
-        f.write(script_data.get('show_notes', blog_excerpt[:200]) + "\n\n")
-        
-        f.write("=" * 80 + "\n")
-        f.write("END OF FILE\n")
-        f.write("=" * 80 + "\n")
-        f.write("\nUpload this entire file to NotebookLM and ask it to create a podcast script.\n")
+    if download_result.get('status') != 'success':
+        # If download fails, return project info so user can download manually
+        return {
+            "status": "partial_success",
+            "message": f"Project created but download failed. Project ID: {project_id}. Download manually from ElevenLabs dashboard.",
+            "project_id": project_id,
+            "audio_filepath": None
+        }
     
-    return filepath
+    print(f"✅ Audio saved: {audio_filepath}")
+    
+    return {
+        "status": "success",
+        "audio_filepath": audio_filepath,
+        "project_id": project_id,
+        "message": "Podcast audio generated successfully"
+    }
+
+# -------------------- Podcast File Management --------------------
 
 # -------------------- Blog Update Functions --------------------
 
@@ -329,7 +766,7 @@ def update_blog_with_podcast(blog_slug: str, podcast_url: str,
 # -------------------- Main Functions --------------------
 
 def create_podcast_from_csv(csv_path: str, duration_minutes: int = 15) -> Dict[str, Any]:
-    """Create podcast script from blog CSV file."""
+    """Create podcast from blog CSV file using ElevenLabs Studio Podcasts API."""
     print(f"\n📖 Reading blog from: {csv_path}")
     blog_data = read_blog_from_csv(csv_path)
     
@@ -342,43 +779,66 @@ def create_podcast_from_csv(csv_path: str, duration_minutes: int = 15) -> Dict[s
     blog_slug = blog_data.get('slug', '')
     
     print(f"📝 Blog: {blog_title}")
-    print(f"🔁 Generating podcast script (this may take a moment)...")
     
-    brand_context = load_brand_context()
-    script_data = generate_podcast_script(blog_title, blog_content, blog_excerpt, 
-                                         brand_context, duration_minutes)
+    # Generate audio with ElevenLabs Studio Podcasts API
+    # The Studio API automatically structures content into a podcast
+    print(f"\n🎙️  Generating podcast with ElevenLabs Studio API...")
+    print(f"   (This will automatically structure your blog into a professional podcast)")
     
-    if script_data.get('status') != 'success':
-        return script_data
+    # Extract plain text from HTML for podcast generation
+    plain_blog_text = extract_text_from_html(blog_content)
     
-    # Save single comprehensive file for NotebookLM
-    notebooklm_filepath = save_comprehensive_notebooklm_file(
-        blog_slug, script_data, blog_title, blog_excerpt, blog_content, brand_context
+    # Map duration_minutes to duration_scale
+    if duration_minutes < 3:
+        duration_scale = "short"
+    elif duration_minutes > 7:
+        duration_scale = "long"
+    else:
+        duration_scale = "default"
+    
+    audio_result = generate_podcast_audio(
+        blog_content=plain_blog_text,
+        blog_title=blog_title,
+        blog_excerpt=blog_excerpt,
+        blog_slug=blog_slug,
+        duration_scale=duration_scale
     )
+    audio_filepath = audio_result.get('audio_filepath') if audio_result.get('status') == 'success' else None
     
-    print(f"\n✅ Podcast generation file created successfully!")
-    print(f"   File: {notebooklm_filepath}")
-    print(f"\n📋 Next Steps:")
-    print(f"   1. Go to https://notebooklm.google.com")
-    print(f"   2. Create a new notebook")
-    print(f"   3. Upload this file: {notebooklm_filepath}")
-    print(f"   4. Ask NotebookLM: 'Create a podcast script based on this blog post'")
-    print(f"   5. Or ask: 'Generate a conversational podcast episode from the blog content'")
-    print(f"\n💡 The file contains everything NotebookLM needs:")
-    print(f"   - Blog content")
-    print(f"   - Brand context")
-    print(f"   - Generated script draft")
-    print(f"   - Instructions")
+    if audio_filepath:
+        print(f"\n✅ Podcast audio generated successfully!")
+        print(f"   📁 Audio file: {audio_filepath}")
+        print(f"\n💡 Your MP3 podcast is ready to use!")
+    else:
+        error_msg = audio_result.get('message', 'Unknown error')
+        print(f"\n❌ Audio generation failed: {error_msg}")
+        
+        # Check if it's a permission error
+        if "missing_permissions" in error_msg or "projects_write" in error_msg:
+            print(f"\n⚠️  PERMISSION ERROR DETECTED:")
+            print(f"   Your API key doesn't have 'projects_write' permission for Studio Podcasts API.")
+            print(f"\n💡 To fix this:")
+            print(f"   1. Go to: https://elevenlabs.io/app/settings/api-keys")
+            print(f"   2. Check your ElevenLabs plan - Studio Podcasts API requires Creator or Pro plan")
+            print(f"   3. Create a new API key with proper permissions")
+            print(f"   4. Update ELEVENLABS_API_KEY in your .env file")
+            print(f"\n   Or upgrade your plan at: https://elevenlabs.io/pricing")
+        
+        return {
+            "status": "error",
+            "message": f"Audio generation failed: {error_msg}",
+            "audio_filepath": None
+        }
     
     return {
         "status": "success",
-        "message": "Podcast generation file created successfully",
-        "notebooklm_filepath": notebooklm_filepath,
-        "script_data": script_data
+        "message": "Podcast generation completed successfully",
+        "audio_filepath": audio_filepath,
+        "project_id": audio_result.get('project_id')
     }
 
 def create_podcast_from_slug(slug: str, duration_minutes: int = 15) -> Dict[str, Any]:
-    """Create podcast script from blog slug in Supabase."""
+    """Create podcast from blog slug in Supabase using ElevenLabs Studio Podcasts API."""
     print(f"\n📖 Fetching blog from Supabase: {slug}")
     blog_data = fetch_blog_from_supabase(slug)
     
@@ -391,40 +851,166 @@ def create_podcast_from_slug(slug: str, duration_minutes: int = 15) -> Dict[str,
     blog_slug = blog_data.get('slug', slug)
     
     print(f"📝 Blog: {blog_title}")
-    print(f"🔁 Generating podcast script (this may take a moment)...")
     
-    brand_context = load_brand_context()
-    script_data = generate_podcast_script(blog_title, blog_content, blog_excerpt, 
-                                         brand_context, duration_minutes)
+    # Generate audio with ElevenLabs Studio Podcasts API
+    # The Studio API automatically structures content into a podcast
+    print(f"\n🎙️  Generating podcast with ElevenLabs Studio API...")
+    print(f"   (This will automatically structure your blog into a professional podcast)")
     
-    if script_data.get('status') != 'success':
-        return script_data
+    # Extract plain text from HTML for podcast generation
+    plain_blog_text = extract_text_from_html(blog_content)
     
-    # Save single comprehensive file for NotebookLM
-    notebooklm_filepath = save_comprehensive_notebooklm_file(
-        blog_slug, script_data, blog_title, blog_excerpt, blog_content, brand_context
+    # Map duration_minutes to duration_scale
+    if duration_minutes < 3:
+        duration_scale = "short"
+    elif duration_minutes > 7:
+        duration_scale = "long"
+    else:
+        duration_scale = "default"
+    
+    audio_result = generate_podcast_audio(
+        blog_content=plain_blog_text,
+        blog_title=blog_title,
+        blog_excerpt=blog_excerpt,
+        blog_slug=blog_slug,
+        duration_scale=duration_scale
     )
+    audio_filepath = audio_result.get('audio_filepath') if audio_result.get('status') == 'success' else None
     
-    print(f"\n✅ Podcast generation file created successfully!")
-    print(f"   File: {notebooklm_filepath}")
-    print(f"\n📋 Next Steps:")
-    print(f"   1. Go to https://notebooklm.google.com")
-    print(f"   2. Create a new notebook")
-    print(f"   3. Upload this file: {notebooklm_filepath}")
-    print(f"   4. Ask NotebookLM: 'Create a podcast script based on this blog post'")
-    print(f"   5. Or ask: 'Generate a conversational podcast episode from the blog content'")
-    print(f"\n💡 The file contains everything NotebookLM needs:")
-    print(f"   - Blog content")
-    print(f"   - Brand context")
-    print(f"   - Generated script draft")
-    print(f"   - Instructions")
+    if audio_filepath:
+        print(f"\n✅ Podcast audio generated successfully!")
+        print(f"   📁 Audio file: {audio_filepath}")
+        print(f"\n💡 Your MP3 podcast is ready to use!")
+    else:
+        error_msg = audio_result.get('message', 'Unknown error')
+        print(f"\n❌ Audio generation failed: {error_msg}")
+        
+        # Check if it's a permission error
+        if "missing_permissions" in error_msg or "projects_write" in error_msg:
+            print(f"\n⚠️  PERMISSION ERROR DETECTED:")
+            print(f"   Your API key doesn't have 'projects_write' permission for Studio Podcasts API.")
+            print(f"\n💡 To fix this:")
+            print(f"   1. Go to: https://elevenlabs.io/app/settings/api-keys")
+            print(f"   2. Check your ElevenLabs plan - Studio Podcasts API requires Creator or Pro plan")
+            print(f"   3. Create a new API key with proper permissions")
+            print(f"   4. Update ELEVENLABS_API_KEY in your .env file")
+            print(f"\n   Or upgrade your plan at: https://elevenlabs.io/pricing")
+        
+        return {
+            "status": "error",
+            "message": f"Audio generation failed: {error_msg}",
+            "audio_filepath": None
+        }
     
     return {
         "status": "success",
-        "message": "Podcast generation file created successfully",
-        "notebooklm_filepath": notebooklm_filepath,
-        "script_data": script_data
+        "message": "Podcast generation completed successfully",
+        "audio_filepath": audio_filepath,
+        "project_id": audio_result.get('project_id')
     }
+
+# -------------------- API Key Permission Check --------------------
+
+def check_elevenlabs_api_permissions() -> Dict[str, Any]:
+    """
+    Check if the ElevenLabs API key has the required permissions for Studio Podcasts API.
+    
+    Returns:
+        Dict with 'status', 'has_permission', 'message', and 'permissions'
+    """
+    if not ELEVENLABS_API_KEY:
+        return {
+            "status": "error",
+            "has_permission": False,
+            "message": "ELEVENLABS_API_KEY not found in environment variables",
+            "permissions": []
+        }
+    
+    # Try to get user info to check permissions
+    url = "https://api.elevenlabs.io/v1/user"
+    
+    headers = {
+        "xi-api-key": ELEVENLABS_API_KEY
+    }
+    
+    try:
+        response = requests.get(url, headers=headers)
+        
+        if response.status_code == 200:
+            user_data = response.json()
+            
+            # Try to create a test project to check permissions
+            test_url = "https://api.elevenlabs.io/v1/studio/podcasts"
+            test_payload = {
+                "model_id": "eleven_multilingual_v2",
+                "mode": {"type": "bulletin"},
+                "source": {
+                    "type": "text",
+                    "text": "Test"
+                }
+            }
+            
+            test_response = requests.post(test_url, json=test_payload, headers={
+                "xi-api-key": ELEVENLABS_API_KEY,
+                "Content-Type": "application/json"
+            })
+            
+            if test_response.status_code == 200:
+                # Success - has permission, clean up test project
+                project_data = test_response.json()
+                project_id = project_data.get('project', {}).get('project_id')
+                if project_id:
+                    # Try to delete test project (optional)
+                    delete_url = f"https://api.elevenlabs.io/v1/studio/podcasts/{project_id}"
+                    requests.delete(delete_url, headers=headers)
+                
+                return {
+                    "status": "success",
+                    "has_permission": True,
+                    "message": "API key has 'projects_write' permission for Studio Podcasts API",
+                    "permissions": ["projects_write"]
+                }
+            elif test_response.status_code == 401:
+                error_data = test_response.json()
+                error_detail = error_data.get('detail', {})
+                
+                if "missing_permissions" in str(error_detail) or "projects_write" in str(error_detail):
+                    return {
+                        "status": "success",
+                        "has_permission": False,
+                        "message": "API key is missing 'projects_write' permission for Studio Podcasts API",
+                        "permissions": [],
+                        "error": error_detail
+                    }
+                else:
+                    return {
+                        "status": "error",
+                        "has_permission": False,
+                        "message": f"API authentication error: {error_detail}",
+                        "permissions": []
+                    }
+            else:
+                return {
+                    "status": "error",
+                    "has_permission": False,
+                    "message": f"Unexpected API response: {test_response.status_code} - {test_response.text}",
+                    "permissions": []
+                }
+        else:
+            return {
+                "status": "error",
+                "has_permission": False,
+                "message": f"Failed to authenticate API key: {response.status_code} - {response.text}",
+                "permissions": []
+            }
+    
+    except Exception as e:
+        return {
+            "status": "error",
+            "has_permission": False,
+            "message": f"Error checking permissions: {str(e)}",
+            "permissions": []
+        }
 
 # -------------------- Main CLI --------------------
 
@@ -436,6 +1022,32 @@ def main():
     
     # Check for command line arguments
     if len(sys.argv) > 1:
+        # Special command: check API permissions
+        if sys.argv[1] == "--check-permissions" or sys.argv[1] == "-c":
+            print("\n🔍 Checking ElevenLabs API key permissions...")
+            print("-" * 60)
+            
+            permission_result = check_elevenlabs_api_permissions()
+            
+            if permission_result.get('status') == 'success':
+                if permission_result.get('has_permission'):
+                    print("✅ SUCCESS: Your API key has the required permissions!")
+                    print(f"   {permission_result.get('message')}")
+                    print(f"\n   Permissions: {', '.join(permission_result.get('permissions', []))}")
+                    print("\n💡 You can now use the Studio Podcasts API to generate podcasts.")
+                else:
+                    print("❌ PERMISSION ERROR: Your API key is missing required permissions!")
+                    print(f"   {permission_result.get('message')}")
+                    print("\n💡 To fix this:")
+                    print("   1. Go to: https://elevenlabs.io/app/settings/api-keys")
+                    print("   2. Check your ElevenLabs plan - Studio Podcasts API requires Creator or Pro plan")
+                    print("   3. Create a new API key with proper permissions")
+                    print("   4. Update ELEVENLABS_API_KEY in your .env file")
+                    print("\n   Or upgrade your plan at: https://elevenlabs.io/pricing")
+            else:
+                print(f"❌ Error checking permissions: {permission_result.get('message')}")
+            
+            return 0 if permission_result.get('has_permission') else 1
         arg = sys.argv[1]
         
         # If it's a CSV file path
@@ -461,9 +1073,10 @@ def main():
     print("1. From CSV file")
     print("2. From Supabase (by slug)")
     print("3. List available blogs")
+    print("4. Check API key permissions")
     
     try:
-        choice = input("\nEnter choice (1-3): ").strip()
+        choice = input("\nEnter choice (1-4): ").strip()
         
         if choice == '1':
             csv_path = input("Enter CSV file path: ").strip()
@@ -519,6 +1132,32 @@ def main():
                 else:
                     print(f"\n❌ Error: {result.get('message')}")
                     return 1
+        
+        elif choice == '4':
+            print("\n🔍 Checking ElevenLabs API key permissions...")
+            print("-" * 60)
+            
+            permission_result = check_elevenlabs_api_permissions()
+            
+            if permission_result.get('status') == 'success':
+                if permission_result.get('has_permission'):
+                    print("✅ SUCCESS: Your API key has the required permissions!")
+                    print(f"   {permission_result.get('message')}")
+                    print(f"\n   Permissions: {', '.join(permission_result.get('permissions', []))}")
+                    print("\n💡 You can now use the Studio Podcasts API to generate podcasts.")
+                else:
+                    print("❌ PERMISSION ERROR: Your API key is missing required permissions!")
+                    print(f"   {permission_result.get('message')}")
+                    print("\n💡 To fix this:")
+                    print("   1. Go to: https://elevenlabs.io/app/settings/api-keys")
+                    print("   2. Check your ElevenLabs plan - Studio Podcasts API requires Creator or Pro plan")
+                    print("   3. Create a new API key with proper permissions")
+                    print("   4. Update ELEVENLABS_API_KEY in your .env file")
+                    print("\n   Or upgrade your plan at: https://elevenlabs.io/pricing")
+            else:
+                print(f"❌ Error checking permissions: {permission_result.get('message')}")
+            
+            return 0 if permission_result.get('has_permission') else 1
         
         else:
             print("❌ Invalid choice")

@@ -12,3 +12,4 @@ requests
 google-genai
 boto3
 Pillow
+elevenlabs
