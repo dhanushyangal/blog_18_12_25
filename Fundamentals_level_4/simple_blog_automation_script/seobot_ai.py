@@ -5,26 +5,23 @@ seobot_ai_gemini.py
 Gemini-only blog automation:
 - Uses Google GenAI (Gemini) for text generation
 - Uses Supabase for storage & DB inserts
-- Falls back to placeholder images when Imagen access is unavailable
 - Robust JSON extraction (marked JSON + raw JSON scan)
 - Produces SEO-optimized HTML blog and inserts into Supabase
 
 Place in: Fundamentals_level_4/simple_blog_automation_script/
-Required .env vars: SUPABASE_URL, SUPABASE_SERVICE_KEY, GEMINI_API_KEY, BUCKET_NAME
-Optional .env vars: GEMINI_MODEL (defaults to models/gemini-2.5-flash), IMAGEN_MODEL
+Required .env vars: SUPABASE_URL, SUPABASE_SERVICE_KEY, GEMINI_API_KEY
+Optional .env vars: GEMINI_MODEL (defaults to models/gemini-2.5-flash)
 """
 
 import os
 import json
 import csv
-import mimetypes
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from slugify import slugify
 from google import genai
-from PIL import Image, ImageDraw
 
 # Load environment
 load_dotenv()
@@ -34,7 +31,6 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "models/gemini-2.5-flash")
-BUCKET_NAME = os.getenv("BUCKET_NAME")
 
 # Validate
 if not all([GEMINI_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_KEY]):
@@ -114,84 +110,6 @@ def calculate_read_time(content: str) -> int:
     wc = len(content.split())
     return max(1, round(wc / words_per_minute))
 
-# -------------------- Image helpers --------------------
-
-def _make_placeholder_image(prompt_text: str, local_filename: str) -> str:
-    os.makedirs(os.path.dirname(local_filename), exist_ok=True)
-    w, h = 1920, 1080
-    img = Image.new('RGB', (w, h), color=(245, 245, 245))
-    draw = ImageDraw.Draw(img)
-    title = "Placeholder Image"
-    draw.text((60, 120), title, fill=(40, 40, 40))
-    prompt_preview = (prompt_text or '')[:400]
-    draw.text((60, 200), prompt_preview, fill=(80, 80, 80))
-    img.save(local_filename, 'JPEG', quality=85, optimize=True)
-    return local_filename
-
-def image_generator(prompt: str) -> Dict[str, Any]:
-    """
-    Generate image via Imagen if possible; otherwise produce local placeholder.
-    Returns dict with keys: status, message, local_path
-    """
-    try:
-        model = os.getenv('IMAGEN_MODEL', 'models/imagen-4.0-ultra-generate-001')
-        try:
-            result = client_genai.models.generate_images(
-                model=model,
-                prompt=prompt,
-                config=dict(number_of_images=1, output_mime_type='image/jpeg', aspect_ratio='16:9', image_size='1K')
-            )
-            if getattr(result, "generated_images", None):
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                local_filename = f"generated_images/blog_header_{timestamp}.jpg"
-                os.makedirs('generated_images', exist_ok=True)
-                img_obj = result.generated_images[0]
-                # Attempt to save via attribute or base64 fallback
-                try:
-                    img_obj.image.save(local_filename)
-                except Exception:
-                    if hasattr(img_obj, 'b64_json'):
-                        import base64
-                        data = base64.b64decode(img_obj.b64_json)
-                        with open(local_filename, 'wb') as f:
-                            f.write(data)
-                    else:
-                        raise
-                return {"status": "success", "message": "Image generated", "local_path": local_filename}
-        except Exception as e:
-            # Imagen likely unavailable (billing/access) — fallback
-            print("Imagen generation error (falling back to placeholder):", e)
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            local_filename = f"generated_images/placeholder_{timestamp}.jpg"
-            _make_placeholder_image(prompt, local_filename)
-            return {"status": "success", "message": "Imagen unavailable — placeholder created", "local_path": local_filename}
-
-        # If SDK returns but no images, create placeholder
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        local_filename = f"generated_images/placeholder_{timestamp}.jpg"
-        _make_placeholder_image(prompt, local_filename)
-        return {"status": "success", "message": "No image generated — placeholder created", "local_path": local_filename}
-
-    except Exception as e:
-        return {"status": "error", "message": f"Failed to generate image: {e}"}
-
-def image_uploader(local_path: str, file_name: Optional[str] = None) -> Dict[str, Any]:
-    try:
-        if not BUCKET_NAME:
-            return {"status": "error", "message": "BUCKET_NAME not configured in .env"}
-        with open(local_path, 'rb') as f:
-            file_data = f.read()
-        _, ext = os.path.splitext(local_path)
-        if not file_name:
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            file_name = f"blog_header_{timestamp}{ext}"
-        bucket = supabase.storage.from_(BUCKET_NAME)
-        bucket.upload(path=f"blog-images/{file_name}", file=file_data, file_options={"content-type": mimetypes.guess_type(local_path)[0] or 'image/jpeg'})
-        public_url = bucket.get_public_url(f"blog-images/{file_name}")
-        return {"status": "success", "message": "Image uploaded", "public_url": public_url, "file_path": f"blog-images/{file_name}"}
-    except Exception as e:
-        return {"status": "error", "message": f"Failed to upload image: {e}"}
-
 # -------------------- Blog creation & insertion --------------------
 
 def generate_schema_markup(title: str, description: str, author: str, published_date: str, image_url: str, faq_items: List[Dict[str, str]] = None) -> str:
@@ -216,42 +134,6 @@ def generate_schema_markup(title: str, description: str, author: str, published_
         return f'<script type="application/ld+json">{json.dumps(schema)}</script>\n<script type="application/ld+json">{json.dumps(faq_schema)}</script>'
     return f'<script type="application/ld+json">{json.dumps(schema)}</script>'
 
-#def blog_creator(title: str, slug: str, meta_title: str, meta_description: str, content: str, excerpt: str, featured_image: str, category: str, tags: List[str], author: str = "Reconstruct Team") -> Dict[str, Any]:
-    try:
-        slug = slugify(slug or title)[:255]
-        schema_markup = generate_schema_markup(title, meta_description or excerpt, author, datetime.now(timezone.utc).isoformat(), featured_image, None)
-        enhanced_content = schema_markup + "\n" + content
-        read_time = calculate_read_time(content)
-        timestamp = datetime.now(timezone.utc).isoformat()
-        blog_data = {
-            'slug': slug,
-            'title': title[:255],
-            'meta_title': (meta_title or title)[:100],
-            'meta_description': (meta_description or excerpt)[:255],
-            'content': enhanced_content,
-            'excerpt': excerpt,
-            'featured_image': featured_image[:500] if featured_image else '',
-            'category': category[:100],
-            'tags': '{' + ','.join([f'"{tag}"' for tag in tags]) + '}',
-            'author': author[:100],
-            'status': 'published',
-            'featured': 'false',
-            'read_time': str(read_time),
-            'view_count': '0',
-            'published_at': timestamp,
-            'updated_at': timestamp,
-            'created_at': timestamp
-        }
-        csv_filename = f"blog_{slug}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        csv_path = os.path.join('generated_blogs', csv_filename)
-        os.makedirs('generated_blogs', exist_ok=True)
-        with open(csv_path, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=blog_data.keys())
-            writer.writeheader()
-            writer.writerow(blog_data)
-        return {"status": "success", "message": f"Blog created successfully: {title}", "file_path": csv_path, "slug": slug}
-    except Exception as e:
-        return {"status": "error", "message": f"Failed to create blog: {e}"}
 def _coerce_to_str(x):
     """Safe coercion to string for CSV/HTML storage."""
     if x is None:
@@ -438,8 +320,6 @@ def blog_inserter(csv_file_path: str = None, file_path: str = None) -> Dict[str,
 # -------------------- Tool dispatcher --------------------
 
 TOOLS = [
-    {"name": "image_generator", "description": "Generate an image or placeholder"},
-    {"name": "image_uploader", "description": "Upload local image to Supabase bucket"},
     {"name": "blog_creator", "description": "Create a blog CSV"},
     {"name": "blog_inserter", "description": "Insert blog CSV into Supabase"}
 ]
@@ -449,10 +329,6 @@ def handle_tool_call(tool_name: str, tool_args: Dict) -> Dict:
         return blog_creator(**tool_args)
     elif tool_name == "blog_inserter":
         return blog_inserter(**tool_args)
-    elif tool_name == "image_generator":
-        return image_generator(prompt=tool_args.get("prompt", ""))
-    elif tool_name == "image_uploader":
-        return image_uploader(**tool_args)
     else:
         return {"status": "error", "message": f"Unknown tool: {tool_name}"}
 
@@ -467,22 +343,33 @@ def build_prompt(system_prompt: str, brand_context: str, existing_blogs_summary:
     instr += ("Your task: produce a fully-formed, SEO-optimized HTML blog post (2000-3000 words) including:\n"
               "- <h1> title, <meta> title and description, structured headings, FAQ (5+ Q&As), References section with URLs.\n"
               "- Use inline citations like [1], [2] where facts are stated.\n"
-              "- At the end, output a JSON object (on its own line) with shape: {\"tool\":\"blog_creator\", \"input\": { ... }} containing fields: title, slug, meta_title, meta_description, content, excerpt, featured_image, category, tags (array).\n"
-              "- If you want an image, output a tool call JSON (on its own line): {\"tool\":\"image_generator\", \"input\": {\"prompt\":\"...\"}} BEFORE the blog_creator JSON.\n"
+              "- At the end, output a JSON object (on its own line) with shape: {\"tool\":\"blog_creator\", \"input\": { ... }} containing fields: title, slug, meta_title, meta_description, content, excerpt, featured_image (leave empty), category, tags (array).\n"
               "- Keep the HTML valid and minimal (no markdown).\n")
     instr += ("IMPORTANT for parsing: When emitting JSON for tools, please wrap the single JSON object between markers EXACTLY like:\n"
               "<<<JSON_START>>>\n"
               '{"tool":"blog_creator","input": {...} }\n'
               "<<<JSON_END>>>\n"
-              "and output nothing else on those marker lines. Do the same for image_generator calls.\n")
-    instr += ("SEO instructions: Use an engaging H1, include the main keyword in the first 100 words, craft a concise meta description (<=160 chars), use H2/H3s, add alt text for the featured image, and suggest 6-12 tags.\n")
+              "and output nothing else on those marker lines.\n")
+    instr += ("SEO instructions: Use an engaging H1, include the main keyword in the first 100 words, craft a concise meta description (<=160 chars), use H2/H3s, and suggest 6-12 tags.\n")
     return instr
 
 # -------------------- Main flow --------------------
 
 def main():
+    import sys
     print("🚀 Starting Gemini-only AI Blog Generator...")
-    user_topic = input("\nEnter article topic (or press ENTER to auto-generate):\n> ").strip() or None
+    
+    # Allow topic to be passed as command-line argument
+    if len(sys.argv) > 1:
+        user_topic = sys.argv[1].strip() or None
+        print(f"\nUsing topic from command line: {user_topic if user_topic else 'Auto-generate'}")
+    else:
+        try:
+            user_topic = input("\nEnter article topic (or press ENTER to auto-generate):\n> ").strip() or None
+        except EOFError:
+            # Handle non-interactive environments
+            print("\nNo topic provided. Auto-generating topic...")
+            user_topic = None
 
     brand_context = load_brand_context()
     existing_blogs = fetch_existing_blogs()
@@ -555,36 +442,13 @@ def main():
             print(f"\n🔧 Gemini requested tool: {tname}")
             res = handle_tool_call(tname, tinput)
             print("   Result:", res.get('message'))
-            # If image generated, upload and then request blog_creator JSON with the image URL
-            if tname == 'image_generator' and res.get('status') == 'success':
-                up = handle_tool_call('image_uploader', {'local_path': res.get('local_path')})
-                print('   Upload result:', up.get('message'))
-                if up.get('status') == 'success':
-                    image_url = up.get('public_url')
-                    # Ask Gemini to produce blog_creator JSON referencing this image (wrapped in markers)
-                    followup = (
-                        "<<<JSON_START>>>\n"
-                        '{"tool":"blog_creator","input": {'
-                        f'"title": "", "slug": "", "meta_title": "", "meta_description": "", "content": "", "excerpt": "", "featured_image": "{image_url}", "category": "", "tags": []'
-                        '}}\n'
-                        "<<<JSON_END>>>\n"
-                        "Please only output the JSON between markers above to instruct the program to create the blog. "
-                    )
-                    resp2 = client_genai.models.generate_content(model=GEMINI_MODEL, contents=followup + "\nPreviously generated content:\n" + g_text)
-                    g2_text = getattr(resp2, 'text', None) or (resp2.output[0].content if getattr(resp2, 'output', None) else None)
-                    parsed_obj = extract_marked_json(g2_text) or extract_first_json(g2_text)
-                    if not parsed_obj:
-                        print("DEBUG: Could not find JSON in Gemini follow-up. Raw follow-up preview:\n", (g2_text or "")[:2000])
-                        return 1
-                    if parsed_obj.get('tool') == 'blog_creator':
-                        creator_res = handle_tool_call('blog_creator', parsed_obj.get('input', {}))
-                        print('   blog_creator:', creator_res.get('message'))
-                        if creator_res.get('status') == 'success':
-                            insert_res = handle_tool_call('blog_inserter', {'csv_file_path': creator_res.get('file_path')})
-                            print('   blog_inserter:', insert_res.get('message'))
-                            if insert_res.get('status') == 'success':
-                                print('\n✅ Blog published at:', insert_res.get('url'))
-                                return 0
+            # If blog_creator succeeded, insert into database
+            if tname == 'blog_creator' and res.get('status') == 'success':
+                insert_res = handle_tool_call('blog_inserter', {'csv_file_path': res.get('file_path')})
+                print('   blog_inserter:', insert_res.get('message'))
+                if insert_res.get('status') == 'success':
+                    print('\n✅ Blog published at:', insert_res.get('url'))
+                    return 0
 
         # If no tool_calls or no final insert yet, ask Gemini to emit blog_creator JSON for the content it generated
         followup_prompt = (
