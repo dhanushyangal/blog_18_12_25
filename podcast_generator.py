@@ -10,7 +10,7 @@ Podcast generation from blog posts:
 - Stores podcast metadata and can update blog posts
 
 Place in: Fundamentals_level_4/simple_blog_automation_script/
-Required .env vars: SUPABASE_URL, SUPABASE_SERVICE_KEY, GEMINI_API_KEY, ELEVENLABS_API_KEY
+Required .env: SUPABASE_URL, SUPABASE_SERVICE_KEY, ELEVENLABS_API_KEY, and either OPENROUTER_API_KEY or GEMINI_API_KEY
 
 MP3 Audio Generation Process:
 1. Script Generation: Gemini AI creates a structured podcast script (intro, segments, outro)
@@ -33,8 +33,9 @@ from typing import Dict, List, Any, Optional
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from slugify import slugify
-from google import genai
 from bs4 import BeautifulSoup
+
+from llm_client import generate_content, require_llm_config
 
 # Fix Windows console encoding for emoji support
 if sys.platform == 'win32':
@@ -53,8 +54,6 @@ load_dotenv()
 # Environment variables
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "models/gemini-2.5-flash")
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")  # Default: Rachel voice
 ELEVENLABS_MODEL = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2")  # High quality, stable for long-form
@@ -62,11 +61,10 @@ ELEVENLABS_GUEST_VOICE_ID = os.getenv("ELEVENLABS_GUEST_VOICE_ID")  # Optional: 
 ELEVENLABS_PODCAST_MODE = os.getenv("ELEVENLABS_PODCAST_MODE", "bulletin")  # "bulletin" (monologue) or "conversation"
 
 # Validate
-if not all([GEMINI_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_KEY]):
-    raise ValueError("Missing required environment variables. Check .env: GEMINI_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_KEY")
+if not all([SUPABASE_URL, SUPABASE_SERVICE_KEY]):
+    raise ValueError("Missing required environment variables. Check .env: SUPABASE_URL, SUPABASE_SERVICE_KEY")
+require_llm_config()
 
-# Clients
-client_genai = genai.Client(api_key=GEMINI_API_KEY)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 # -------------------- Helpers --------------------
@@ -190,11 +188,9 @@ Make it natural, conversational, and easy to read aloud. Use the brand voice fro
 """
 
     try:
-        resp = client_genai.models.generate_content(model=GEMINI_MODEL, contents=prompt)
-        g_text = getattr(resp, 'text', None) or (resp.output[0].content if getattr(resp, 'output', None) else None)
-        
+        g_text = generate_content(prompt)
         if not g_text:
-            return {"status": "error", "message": "No content returned from Gemini"}
+            return {"status": "error", "message": "No content returned from LLM"}
         
         # Try to extract JSON from response
         json_match = re.search(r'\{.*\}', g_text, re.DOTALL)

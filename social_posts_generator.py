@@ -5,8 +5,8 @@ social_posts_generator.py
 Generates LinkedIn and Instagram posts from blog posts using Gemini AI.
 Saves posts to Supabase database.
 
-Required .env vars: SUPABASE_URL, SUPABASE_SERVICE_KEY, GEMINI_API_KEY
-Optional .env vars: GEMINI_MODEL (defaults to models/gemini-2.5-flash)
+Required .env: SUPABASE_URL, SUPABASE_SERVICE_KEY, and either OPENROUTER_API_KEY or GEMINI_API_KEY
+Optional: OPENROUTER_MODEL (default arcee-ai/trinity-large-preview:free), GEMINI_MODEL (default models/gemini-2.5-flash)
 """
 
 import os
@@ -16,8 +16,9 @@ from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
 from dotenv import load_dotenv
 from supabase import create_client, Client
-from google import genai
 from bs4 import BeautifulSoup
+
+from llm_client import generate_content, require_llm_config
 
 # Load environment
 load_dotenv()
@@ -25,15 +26,12 @@ load_dotenv()
 # Environment variables
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "models/gemini-2.5-flash")
 
 # Validate
-if not all([GEMINI_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_KEY]):
-    raise ValueError("Missing required environment variables. Check .env: GEMINI_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_KEY")
+if not all([SUPABASE_URL, SUPABASE_SERVICE_KEY]):
+    raise ValueError("Missing required environment variables. Check .env: SUPABASE_URL, SUPABASE_SERVICE_KEY")
+require_llm_config()
 
-# Clients
-client_genai = genai.Client(api_key=GEMINI_API_KEY)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 # -------------------- Helpers --------------------
@@ -116,6 +114,24 @@ def list_available_blogs_from_supabase(limit: int = 50) -> List[Dict[str, Any]]:
         print(f"Error fetching blogs from Supabase: {e}")
         return []
 
+
+def normalize_blog_slug(user_input: str) -> str:
+    """
+    Convert user input to a blog slug. Accepts:
+    - Slug: mastering-stress-mental-fitness-burnout-prevention
+    - CSV path/filename: blog_mastering-stress-..._20260212_164050.csv or full path
+    """
+    if not user_input or not user_input.strip():
+        return user_input.strip()
+    s = user_input.strip()
+    # Path or filename: take basename
+    if "\\" in s or "/" in s:
+        s = os.path.basename(s)
+    # CSV filename like blog_slug_YYYYMMDD_HHMMSS.csv
+    if s.endswith(".csv") and s.lower().startswith("blog_"):
+        s = s[:-4].replace("blog_", "", 1).rsplit("_", 2)[0]
+    return s
+
 # -------------------- LinkedIn Post Generation --------------------
 
 def generate_linkedin_post(blog_slug: str) -> Dict[str, Any]:
@@ -181,11 +197,9 @@ Do not include any markdown formatting, just plain text. Make it engaging and pr
 """
         
         print(f"\n🔗 Generating LinkedIn post for: {blog_title}")
-        resp = client_genai.models.generate_content(model=GEMINI_MODEL, contents=linkedin_prompt)
-        g_text = getattr(resp, 'text', None) or (resp.output[0].content if getattr(resp, 'output', None) else None)
-        
+        g_text = generate_content(linkedin_prompt)
         if not g_text:
-            return {"status": "error", "message": "No content returned from Gemini"}
+            return {"status": "error", "message": "No content returned from LLM"}
         
         # Extract JSON from response
         json_match = re.search(r'\{[^{}]*"content"[^{}]*\}', g_text, re.DOTALL)
@@ -321,11 +335,9 @@ Make it engaging, authentic, and aligned with mental fitness and wellness themes
 """
         
         print(f"\n📸 Generating Instagram post for: {blog_title}")
-        resp = client_genai.models.generate_content(model=GEMINI_MODEL, contents=instagram_prompt)
-        g_text = getattr(resp, 'text', None) or (resp.output[0].content if getattr(resp, 'output', None) else None)
-        
+        g_text = generate_content(instagram_prompt)
         if not g_text:
-            return {"status": "error", "message": "No content returned from Gemini"}
+            return {"status": "error", "message": "No content returned from LLM"}
         
         # Extract JSON from response
         json_match = re.search(r'\{[^{}]*"caption"[^{}]*\}', g_text, re.DOTALL)
@@ -569,7 +581,7 @@ def main():
     
     # Check for command line arguments
     if len(sys.argv) > 1:
-        blog_slug = sys.argv[1]
+        blog_slug = normalize_blog_slug(sys.argv[1])
         include_linkedin = '--instagram-only' not in sys.argv
         include_instagram = '--linkedin-only' not in sys.argv
         
@@ -604,7 +616,7 @@ def main():
         choice = input("\nEnter choice (1-4): ").strip()
         
         if choice == '1':
-            slug = input("Enter blog slug: ").strip()
+            slug = normalize_blog_slug(input("Enter blog slug (e.g. mastering-stress-mental-fitness-burnout-prevention): ").strip())
             if not slug:
                 print("❌ No slug provided")
                 return 1
@@ -658,8 +670,8 @@ def main():
                     print("❌ Invalid selection")
                     return 1
             except ValueError:
-                # Treat as slug
-                blog_slug = selection
+                # Treat as slug or path/filename
+                blog_slug = normalize_blog_slug(selection)
             
             # Ask which platforms
             print("\nSelect platforms:")
@@ -708,8 +720,8 @@ def main():
                     print("❌ Invalid selection")
                     return 1
             except ValueError:
-                # Treat as slug
-                blog_slug = selection
+                # Treat as slug or path/filename
+                blog_slug = normalize_blog_slug(selection)
             
             # Ask which platforms
             print("\nSelect platforms:")
@@ -738,7 +750,7 @@ def main():
             return 0 if results.get('status') == 'success' else 1
         
         elif choice == '4':
-            slug = input("Enter blog slug: ").strip()
+            slug = normalize_blog_slug(input("Enter blog slug or CSV path (e.g. mastering-stress-mental-fitness-burnout-prevention): ").strip())
             if not slug:
                 print("❌ No slug provided")
                 return 1
