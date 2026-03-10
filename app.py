@@ -32,10 +32,16 @@ try:
     from fastapi.templating import Jinja2Templates
     from pydantic import BaseModel
 except ModuleNotFoundError as e:
-    print("Missing dependency:", e.name or e)
-    print("Install with:  pip install python-dotenv fastapi uvicorn jinja2 python-multipart")
-    print("Or install all:  pip install -r requirements.txt")
-    sys.exit(1)
+    missing = (e.name or "dotenv").strip()
+    print("Missing dependency:", missing, "-> installing into current Python...")
+    import subprocess
+    req_file = Path(__file__).parent / "requirements.txt"
+    if req_file.exists():
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", str(req_file)], stdout=sys.stdout, stderr=sys.stderr)
+    else:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "python-dotenv", "fastapi", "uvicorn[standard]", "jinja2", "python-multipart"], stdout=sys.stdout, stderr=sys.stderr)
+    print("Done. Restarting...")
+    os.execv(sys.executable, [sys.executable] + sys.argv)
 
 load_dotenv()
 

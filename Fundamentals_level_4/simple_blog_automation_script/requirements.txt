@@ -1,7 +1,0 @@
-# Blog automation, podcast, social posts – install in venv before running scripts
-python-dotenv
-supabase
-requests
-google-genai
-python-slugify
-beautifulsoup4
