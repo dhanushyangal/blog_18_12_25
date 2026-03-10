@@ -291,17 +291,103 @@ async def generate_blog(req: BlogGenerateRequest):
 
 # --------------- List blogs ---------------
 
+def _list_blogs_from_csv() -> List[Dict[str, Any]]:
+    """List all blogs from generated_blogs/*.csv files."""
+    import csv as csv_module
+    blogs = []
+    blog_dir = Path(__file__).parent / "generated_blogs"
+    if not blog_dir.exists():
+        return []
+    for f in sorted(blog_dir.glob("blog_*.csv"), key=lambda p: p.stat().st_mtime, reverse=True):
+        try:
+            with open(f, "r", encoding="utf-8") as fp:
+                reader = csv_module.DictReader(fp)
+                row = next(reader, None)
+                if not row:
+                    continue
+                # Parse tags from PostgreSQL array format {"a","b"} to list
+                tags_raw = row.get("tags", "") or ""
+                if tags_raw.strip().startswith("{"):
+                    tags_str = tags_raw.strip("{}")
+                    tags_list = [t.strip().strip('"') for t in tags_str.split(",") if t.strip()]
+                else:
+                    tags_list = []
+                blogs.append({
+                    "id": None,
+                    "slug": row.get("slug", ""),
+                    "title": row.get("title", ""),
+                    "category": row.get("category", ""),
+                    "excerpt": row.get("excerpt", ""),
+                    "tags": tags_list,
+                    "status": row.get("status", "published"),
+                    "author": row.get("author", ""),
+                    "read_time": row.get("read_time", "0"),
+                    "published_at": row.get("published_at", ""),
+                    "featured_image": row.get("featured_image", ""),
+                    "source": "csv",
+                })
+        except Exception as e:
+            logger.warning("Skip CSV %s: %s", f.name, e)
+    return blogs
+
+
+def _get_blog_from_csv(slug: str) -> Optional[Dict[str, Any]]:
+    """Load a single blog from generated_blogs by slug (matches blog_{slug}_*.csv)."""
+    import csv as csv_module
+    blog_dir = Path(__file__).parent / "generated_blogs"
+    if not blog_dir.exists():
+        return None
+    for f in blog_dir.glob(f"blog_{slug}_*.csv"):
+        try:
+            with open(f, "r", encoding="utf-8") as fp:
+                reader = csv_module.DictReader(fp)
+                row = next(reader, None)
+                if not row:
+                    continue
+                tags_raw = row.get("tags", "") or ""
+                if tags_raw.strip().startswith("{"):
+                    tags_str = tags_raw.strip("{}")
+                    tags_list = [t.strip().strip('"') for t in tags_str.split(",") if t.strip()]
+                else:
+                    tags_list = []
+                return {
+                    **row,
+                    "tags": tags_list,
+                    "source": "csv",
+                }
+        except Exception as e:
+            logger.warning("Read CSV %s: %s", f.name, e)
+    return None
+
+
 @app.get("/api/blogs")
 async def list_blogs():
     logger.info("GET /api/blogs")
     try:
-        sb = _get_supabase()
-        resp = sb.table("blog_posts").select(
-            "id, slug, title, category, excerpt, tags, status, author, read_time, published_at, featured_image"
-        ).order("published_at", desc=True).limit(50).execute()
-        blogs = resp.data or []
-        logger.info("Returned %d blogs", len(blogs))
-        return {"status": "success", "blogs": blogs}
+        # 1) Blogs from Supabase (all statuses)
+        supabase_blogs = []
+        try:
+            sb = _get_supabase()
+            resp = sb.table("blog_posts").select(
+                "id, slug, title, category, excerpt, tags, status, author, read_time, published_at, featured_image"
+            ).order("published_at", desc=True).limit(50).execute()
+            supabase_blogs = [{"source": "supabase", **b} for b in (resp.data or [])]
+        except Exception as e:
+            logger.warning("Supabase blogs: %s", e)
+
+        # 2) Blogs from generated_blogs/*.csv (local only)
+        csv_blogs = _list_blogs_from_csv()
+
+        # 3) Merge: CSV slugs we already have from Supabase -> skip duplicate CSV so we don't show same blog twice
+        supabase_slugs = {b["slug"] for b in supabase_blogs}
+        csv_only = [b for b in csv_blogs if b["slug"] not in supabase_slugs]
+        combined = supabase_blogs + csv_only
+        # Sort by published_at desc (empty string last)
+        combined.sort(key=lambda x: x.get("published_at") or "", reverse=True)
+        combined = combined[:80]
+
+        logger.info("Returned %d blogs (%d Supabase + %d local CSV)", len(combined), len(supabase_blogs), len(csv_only))
+        return {"status": "success", "blogs": combined}
     except Exception as e:
         logger.error("Failed to list blogs: %s", e)
         raise HTTPException(500, detail=str(e))
@@ -310,10 +396,20 @@ async def list_blogs():
 @app.get("/api/blogs/{slug}")
 async def get_blog(slug: str):
     try:
-        sb = _get_supabase()
-        resp = sb.table("blog_posts").select("*").eq("slug", slug).execute()
-        if resp.data:
-            return {"status": "success", "blog": resp.data[0]}
+        # 1) Try Supabase
+        try:
+            sb = _get_supabase()
+            resp = sb.table("blog_posts").select("*").eq("slug", slug).execute()
+            if resp.data:
+                return {"status": "success", "blog": {**resp.data[0], "source": "supabase"}}
+        except Exception:
+            pass
+
+        # 2) Try local CSV
+        csv_blog = _get_blog_from_csv(slug)
+        if csv_blog:
+            return {"status": "success", "blog": csv_blog}
+
         raise HTTPException(404, detail="Blog not found")
     except HTTPException:
         raise
