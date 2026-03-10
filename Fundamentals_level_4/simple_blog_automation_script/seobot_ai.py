@@ -9,8 +9,8 @@ Gemini-only blog automation:
 - Produces SEO-optimized HTML blog and inserts into Supabase
 
 Place in: Fundamentals_level_4/simple_blog_automation_script/
-Required .env vars: SUPABASE_URL, SUPABASE_SERVICE_KEY, GEMINI_API_KEY
-Optional .env vars: GEMINI_MODEL (defaults to models/gemini-2.5-flash)
+Required .env: SUPABASE_URL, SUPABASE_SERVICE_KEY, and either OPENROUTER_API_KEY or GEMINI_API_KEY
+Optional: OPENROUTER_MODEL (default arcee-ai/trinity-large-preview:free), GEMINI_MODEL (default models/gemini-2.5-flash)
 """
 
 import os
@@ -21,7 +21,8 @@ from typing import Dict, List, Any, Optional
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from slugify import slugify
-from google import genai
+
+from llm_client import generate_content, require_llm_config
 
 # Load environment
 load_dotenv()
@@ -29,15 +30,12 @@ load_dotenv()
 # Environment variables
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "models/gemini-2.5-flash")
 
 # Validate
-if not all([GEMINI_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_KEY]):
-    raise ValueError("Missing required environment variables. Check .env: GEMINI_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_KEY")
+if not all([SUPABASE_URL, SUPABASE_SERVICE_KEY]):
+    raise ValueError("Missing required environment variables. Check .env: SUPABASE_URL, SUPABASE_SERVICE_KEY")
+require_llm_config()
 
-# Clients
-client_genai = genai.Client(api_key=GEMINI_API_KEY)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 # -------------------- Helpers --------------------
@@ -379,12 +377,11 @@ def main():
 
     prompt_text = build_prompt(system_prompt, brand_context, existing_blogs_summary, user_topic)
 
-    print("\n🔁 Sending prompt to Gemini (this may take a bit)...")
+    print("\n🔁 Sending prompt to LLM (this may take a bit)...")
     try:
-        resp = client_genai.models.generate_content(model=GEMINI_MODEL, contents=prompt_text)
-        g_text = getattr(resp, 'text', None) or (resp.output[0].content if getattr(resp, 'output', None) else None)
+        g_text = generate_content(prompt_text)
         if not g_text:
-            print("No content returned from Gemini.")
+            print("No content returned from LLM.")
             return 1
 
         # Look for JSON tool-call objects in the response (either marked or raw)
@@ -439,7 +436,7 @@ def main():
         for tc in tool_calls:
             tname = tc.get('tool')
             tinput = tc.get('input', {})
-            print(f"\n🔧 Gemini requested tool: {tname}")
+            print(f"\n🔧 LLM requested tool: {tname}")
             res = handle_tool_call(tname, tinput)
             print("   Result:", res.get('message'))
             # If blog_creator succeeded, insert into database
@@ -450,7 +447,7 @@ def main():
                     print('\n✅ Blog published at:', insert_res.get('url'))
                     return 0
 
-        # If no tool_calls or no final insert yet, ask Gemini to emit blog_creator JSON for the content it generated
+        # If no tool_calls or no final insert yet, ask LLM to emit blog_creator JSON for the content it generated
         followup_prompt = (
             "You generated content above. Now, output ONLY a single JSON object wrapped between <<<JSON_START>>> and <<<JSON_END>>> markers, "
             "with this exact shape:\n"
@@ -459,8 +456,7 @@ def main():
             "<<<JSON_END>>>\n"
             "Do not output any other text. The JSON must be valid."
         )
-        resp3 = client_genai.models.generate_content(model=GEMINI_MODEL, contents=followup_prompt + "\nPreviously generated content:\n" + (g_text or ""))
-        g3_text = getattr(resp3, 'text', None) or (resp3.output[0].content if getattr(resp3, 'output', None) else None)
+        g3_text = generate_content(followup_prompt + "\nPreviously generated content:\n" + (g_text or ""))
         obj = extract_marked_json(g3_text) or extract_first_json(g3_text)
         if not obj:
             print("DEBUG: Could not find final blog_creator JSON. Raw follow-up preview:\n", (g3_text or "")[:2000])
@@ -480,7 +476,7 @@ def main():
         return 1
 
     except Exception as e:
-        print('\n❌ Error while calling Gemini:', e)
+        print('\n❌ Error while calling LLM:', e)
         return 1
 
 if __name__ == '__main__':

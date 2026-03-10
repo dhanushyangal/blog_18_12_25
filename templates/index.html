@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SEO Blog Automation</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: { 50:'#f0fdf4', 100:'#dcfce7', 200:'#bbf7d0', 300:'#86efac', 400:'#4ade80', 500:'#22c55e', 600:'#16a34a', 700:'#15803d', 800:'#166534', 900:'#14532d' },
+            surface: { 50:'#f8fafc', 100:'#f1f5f9', 200:'#e2e8f0', 300:'#cbd5e1' },
+          },
+          fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'] },
+        }
+      }
+    }
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    body { font-family: 'Inter', system-ui, sans-serif; }
+    .fade-in { animation: fadeIn .3s ease-in-out; }
+    @keyframes fadeIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+    .spinner { border:3px solid #e2e8f0; border-top:3px solid #22c55e; border-radius:50%; width:20px; height:20px; animation:spin .7s linear infinite; display:inline-block; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    .pulse-dot { width:8px; height:8px; border-radius:50%; animation:pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+    .sidebar-link { transition: all .15s ease; }
+    .sidebar-link:hover, .sidebar-link.active { background: rgba(255,255,255,.12); }
+    .card { transition: box-shadow .2s ease, transform .15s ease; }
+    .card:hover { box-shadow: 0 8px 25px -5px rgb(0 0 0 / .08); transform: translateY(-1px); }
+    textarea:focus, input:focus, select:focus { outline:none; box-shadow: 0 0 0 3px rgba(34,197,94,.2); border-color:#22c55e; }
+    .blog-row { transition: background .15s; }
+    .blog-row:hover { background: #f8fafc; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+  </style>
+</head>
+<body class="h-full bg-gray-50 text-gray-800">
+
+<div class="flex h-full">
+  <!-- Sidebar -->
+  <aside class="w-64 bg-gray-900 text-white flex flex-col flex-shrink-0 fixed h-full z-30">
+    <div class="p-5 border-b border-white/10">
+      <h1 class="text-lg font-bold tracking-tight">SEO Blog Automation</h1>
+      <p class="text-xs text-gray-400 mt-1">Content generation dashboard</p>
+    </div>
+    <nav class="flex-1 py-4 px-3 space-y-1 overflow-y-auto">
+      <a href="#" onclick="showSection('generate')" data-nav="generate" class="sidebar-link active flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium">
+        <svg class="w-5 h-5 text-brand-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+        Generate Blog
+      </a>
+      <a href="#" onclick="showSection('blogs')" data-nav="blogs" class="sidebar-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-300">
+        <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z"/></svg>
+        Published Blogs
+      </a>
+      <a href="#" onclick="showSection('social')" data-nav="social" class="sidebar-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-300">
+        <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"/></svg>
+        Social Posts
+      </a>
+      <a href="#" onclick="showSection('podcast')" data-nav="podcast" class="sidebar-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-300">
+        <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/></svg>
+        Podcast
+      </a>
+      <a href="#" onclick="showSection('wordpress')" data-nav="wordpress" class="sidebar-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-300">
+        <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+        WordPress Sync
+      </a>
+      <a href="#" onclick="showSection('brand')" data-nav="brand" class="sidebar-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-300">
+        <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+        Brand Context
+      </a>
+      <a href="#" onclick="showSection('settings')" data-nav="settings" class="sidebar-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-300">
+        <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+        Settings
+      </a>
+    </nav>
+    <div class="p-4 border-t border-white/10">
+      <div class="flex items-center gap-2 text-xs text-gray-400">
+        <div id="status-dot" class="pulse-dot bg-brand-400"></div>
+        <span id="status-text">System ready</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main content -->
+  <main class="flex-1 ml-64 overflow-y-auto">
+    <div class="max-w-5xl mx-auto px-6 py-8">
+
+      <!-- ===================== GENERATE BLOG ===================== -->
+      <section id="sec-generate" class="fade-in">
+        <div class="mb-8">
+          <h2 class="text-2xl font-bold text-gray-900">Generate New Blog</h2>
+          <p class="text-gray-500 mt-1">Enter your website, brand context, and topic to generate an SEO-optimized blog post.</p>
+        </div>
+
+        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 space-y-5">
+          <div>
+            <label class="block text-sm font-semibold text-gray-700 mb-1.5">Website URL</label>
+            <input id="gen-website" type="url" placeholder="https://yourwebsite.com" class="w-full px-4 py-2.5 rounded-xl border border-gray-200 bg-gray-50 text-sm placeholder-gray-400 focus:bg-white transition" />
+            <p class="text-xs text-gray-400 mt-1">Used as a reference for the generated content</p>
+          </div>
+
+          <div>
+            <label class="block text-sm font-semibold text-gray-700 mb-1.5">Brand Context <span class="text-gray-400 font-normal">(optional override)</span></label>
+            <textarea id="gen-brand" rows="4" placeholder="Describe your brand, audience, tone, key features..." class="w-full px-4 py-2.5 rounded-xl border border-gray-200 bg-gray-50 text-sm placeholder-gray-400 focus:bg-white transition resize-y"></textarea>
+            <p class="text-xs text-gray-400 mt-1">Leave blank to use the saved brand context</p>
+          </div>
+
+          <div>
+            <label class="block text-sm font-semibold text-gray-700 mb-1.5">Blog Topic <span class="text-gray-400 font-normal">(optional)</span></label>
+            <input id="gen-topic" type="text" placeholder="e.g. Mastering stress management for everyday mental fitness" class="w-full px-4 py-2.5 rounded-xl border border-gray-200 bg-gray-50 text-sm placeholder-gray-400 focus:bg-white transition" />
+            <p class="text-xs text-gray-400 mt-1">Leave blank to let the AI suggest a topic</p>
+          </div>
+
+          <div class="flex items-center gap-3 pt-2">
+            <button onclick="generateBlog()" id="btn-generate" class="px-6 py-2.5 bg-brand-600 hover:bg-brand-700 text-white font-semibold text-sm rounded-xl shadow-sm transition flex items-center gap-2">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+              Generate Blog
+            </button>
+            <span id="gen-spinner" class="hidden"><span class="spinner"></span> <span class="text-sm text-gray-500 ml-1">Generating... this may take 1-2 minutes</span></span>
+          </div>
+
+          <div id="gen-result" class="hidden mt-4"></div>
+        </div>
+      </section>
+
+      <!-- ===================== PUBLISHED BLOGS ===================== -->
+      <section id="sec-blogs" class="fade-in hidden">
+        <div class="flex items-center justify-between mb-8">
+          <div>
+            <h2 class="text-2xl font-bold text-gray-900">Published Blogs</h2>
+            <p class="text-gray-500 mt-1">All blog posts stored in your Supabase database.</p>
+          </div>
+          <button onclick="loadBlogs()" class="px-4 py-2 text-sm font-medium text-brand-700 bg-brand-50 hover:bg-brand-100 rounded-xl transition">
+            Refresh
+          </button>
+        </div>
+        <div id="blogs-list" class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+          <div class="p-12 text-center text-gray-400"><span class="spinner"></span> Loading blogs...</div>
+        </div>
+      </section>
+
+      <!-- ===================== BLOG DETAIL ===================== -->
+      <section id="sec-blog-detail" class="fade-in hidden">
+        <div class="mb-6">
+          <button onclick="showSection('blogs')" class="text-sm text-brand-600 hover:text-brand-700 font-medium flex items-center gap-1 mb-4">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+            Back to blogs
+          </button>
+        </div>
+        <div id="blog-detail-content"></div>
+      </section>
+
+      <!-- ===================== SOCIAL POSTS ===================== -->
+      <section id="sec-social" class="fade-in hidden">
+        <div class="mb-8">
+          <h2 class="text-2xl font-bold text-gray-900">Social Media Posts</h2>
+          <p class="text-gray-500 mt-1">Generate LinkedIn and Instagram posts from your published blogs.</p>
+        </div>
+        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 space-y-5">
+          <div>
+            <label class="block text-sm font-semibold text-gray-700 mb-1.5">Select Blog</label>
+            <select id="social-blog-select" class="w-full px-4 py-2.5 rounded-xl border border-gray-200 bg-gray-50 text-sm">
+              <option value="">Loading blogs...</option>
+            </select>
+          </div>
+          <div class="flex items-center gap-6">
+            <label class="flex items-center gap-2 text-sm">
+              <input type="checkbox" id="social-linkedin" checked class="rounded text-brand-600 focus:ring-brand-500" />
+              LinkedIn
+            </label>
+            <label class="flex items-center gap-2 text-sm">
+              <input type="checkbox" id="social-instagram" checked class="rounded text-brand-600 focus:ring-brand-500" />
+              Instagram
+            </label>
+          </div>
+          <div class="flex items-center gap-3 pt-1">
+            <button onclick="generateSocialPosts()" id="btn-social" class="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-sm rounded-xl shadow-sm transition flex items-center gap-2">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"/></svg>
+              Generate Social Posts
+            </button>
+            <span id="social-spinner" class="hidden"><span class="spinner"></span> <span class="text-sm text-gray-500 ml-1">Generating...</span></span>
+          </div>
+          <div id="social-result" class="hidden mt-4"></div>
+        </div>
+      </section>
+
+      <!-- ===================== PODCAST ===================== -->
+      <section id="sec-podcast" class="fade-in hidden">
+        <div class="mb-8">
+          <h2 class="text-2xl font-bold text-gray-900">Podcast Generator</h2>
+          <p class="text-gray-500 mt-1">Create podcast audio from your published blog posts using ElevenLabs.</p>
+        </div>
+        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 space-y-5">
+          <div>
+            <label class="block text-sm font-semibold text-gray-700 mb-1.5">Select Blog</label>
+            <select id="podcast-blog-select" class="w-full px-4 py-2.5 rounded-xl border border-gray-200 bg-gray-50 text-sm">
+              <option value="">Loading blogs...</option>
+            </select>
+          </div>
+          <div class="flex items-center gap-3 pt-1">
+            <button onclick="generatePodcast()" id="btn-podcast" class="px-6 py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-semibold text-sm rounded-xl shadow-sm transition flex items-center gap-2">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/></svg>
+              Generate Podcast
+            </button>
+            <span id="podcast-spinner" class="hidden"><span class="spinner"></span> <span class="text-sm text-gray-500 ml-1">Generating podcast...</span></span>
+          </div>
+          <div id="podcast-result" class="hidden mt-4"></div>
+        </div>
+      </section>
+
+      <!-- ===================== WORDPRESS SYNC ===================== -->
+      <section id="sec-wordpress" class="fade-in hidden">
+        <div class="mb-8">
+          <h2 class="text-2xl font-bold text-gray-900">WordPress Sync</h2>
+          <p class="text-gray-500 mt-1">Push your Supabase blog posts to WordPress.</p>
+        </div>
+        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 space-y-5">
+          <div>
+            <label class="block text-sm font-semibold text-gray-700 mb-1.5">Select Blog <span class="text-gray-400 font-normal">(leave empty for latest)</span></label>
+            <select id="wp-blog-select" class="w-full px-4 py-2.5 rounded-xl border border-gray-200 bg-gray-50 text-sm">
+              <option value="">Latest blog</option>
+            </select>
+          </div>
+          <label class="flex items-center gap-2 text-sm">
+            <input type="checkbox" id="wp-update" class="rounded text-brand-600 focus:ring-brand-500" />
+            Update if already exists in WordPress
+          </label>
+          <div class="flex items-center gap-3 pt-1">
+            <button onclick="syncWordPress()" id="btn-wp" class="px-6 py-2.5 bg-sky-600 hover:bg-sky-700 text-white font-semibold text-sm rounded-xl shadow-sm transition flex items-center gap-2">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+              Sync to WordPress
+            </button>
+            <span id="wp-spinner" class="hidden"><span class="spinner"></span> <span class="text-sm text-gray-500 ml-1">Syncing...</span></span>
+          </div>
+          <div id="wp-result" class="hidden mt-4"></div>
+        </div>
+      </section>
+
+      <!-- ===================== BRAND CONTEXT ===================== -->
+      <section id="sec-brand" class="fade-in hidden">
+        <div class="mb-8">
+          <h2 class="text-2xl font-bold text-gray-900">Brand Context</h2>
+          <p class="text-gray-500 mt-1">This is the brand description used in every generation prompt. Edit and save below.</p>
+        </div>
+        <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 space-y-5">
+          <textarea id="brand-content" rows="20" class="w-full px-4 py-3 rounded-xl border border-gray-200 bg-gray-50 text-sm leading-relaxed placeholder-gray-400 focus:bg-white transition resize-y font-mono" placeholder="Loading..."></textarea>
+          <div class="flex items-center gap-3">
+            <button onclick="saveBrandContext()" class="px-6 py-2.5 bg-brand-600 hover:bg-brand-700 text-white font-semibold text-sm rounded-xl shadow-sm transition">
+              Save Brand Context
+            </button>
+            <span id="brand-status" class="text-sm text-gray-500"></span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===================== SETTINGS ===================== -->
+      <section id="sec-settings" class="fade-in hidden">
+        <div class="mb-8">
+          <h2 class="text-2xl font-bold text-gray-900">Settings</h2>
+          <p class="text-gray-500 mt-1">Current API configuration status (managed via <code class="bg-gray-100 px-1.5 py-0.5 rounded text-xs">.env</code> file).</p>
+        </div>
+        <div id="settings-grid" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div class="p-5 text-center text-gray-400"><span class="spinner"></span> Loading...</div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+</div>
+
+<!-- Toast notification -->
+<div id="toast" class="fixed bottom-6 right-6 z-50 hidden">
+  <div id="toast-inner" class="flex items-center gap-3 px-5 py-3 rounded-xl shadow-lg text-sm font-medium max-w-md"></div>
+</div>
+
+<script>
+const API = '';
+
+let allBlogs = [];
+
+// ---- Navigation ----
+function showSection(name) {
+  document.querySelectorAll('main > div > section').forEach(s => s.classList.add('hidden'));
+  const sec = document.getElementById('sec-' + name);
+  if (sec) { sec.classList.remove('hidden'); sec.classList.add('fade-in'); }
+
+  document.querySelectorAll('[data-nav]').forEach(a => {
+    a.classList.remove('active');
+    a.classList.add('text-gray-300');
+    a.querySelector('svg')?.classList.replace('text-brand-400','text-gray-400');
+  });
+  const nav = document.querySelector(`[data-nav="${name}"]`);
+  if (nav) {
+    nav.classList.add('active');
+    nav.classList.remove('text-gray-300');
+    nav.querySelector('svg')?.classList.replace('text-gray-400','text-brand-400');
+  }
+
+  if (name === 'blogs') loadBlogs();
+  if (name === 'brand') loadBrandContext();
+  if (name === 'settings') loadSettings();
+  if (name === 'social' || name === 'podcast' || name === 'wordpress') populateBlogSelects();
+}
+
+// ---- Toast ----
+function toast(msg, type='success') {
+  const el = document.getElementById('toast');
+  const inner = document.getElementById('toast-inner');
+  const colors = { success:'bg-brand-600 text-white', error:'bg-red-600 text-white', info:'bg-gray-800 text-white' };
+  inner.className = 'flex items-center gap-3 px-5 py-3 rounded-xl shadow-lg text-sm font-medium max-w-md ' + (colors[type] || colors.info);
+  inner.textContent = msg;
+  el.classList.remove('hidden');
+  setTimeout(() => el.classList.add('hidden'), 4500);
+}
+
+// ---- API helpers ----
+async function apiGet(path) {
+  const r = await fetch(API + path);
+  if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.detail || r.statusText); }
+  return r.json();
+}
+async function apiPost(path, body) {
+  const r = await fetch(API + path, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.detail || r.statusText); }
+  return r.json();
+}
+
+// ---- Generate Blog ----
+async function generateBlog() {
+  const topic = document.getElementById('gen-topic').value.trim();
+  const website = document.getElementById('gen-website').value.trim();
+  const brand = document.getElementById('gen-brand').value.trim();
+  const btn = document.getElementById('btn-generate');
+  const spinner = document.getElementById('gen-spinner');
+  const result = document.getElementById('gen-result');
+
+  btn.disabled = true; btn.classList.add('opacity-50');
+  spinner.classList.remove('hidden');
+  result.classList.add('hidden');
+  setStatus('Generating blog...');
+
+  try {
+    const data = await apiPost('/api/generate-blog', { topic: topic || null, website_url: website || null, brand_context: brand || null });
+    result.classList.remove('hidden');
+    if (data.status === 'success') {
+      result.innerHTML = `
+        <div class="bg-brand-50 border border-brand-200 rounded-xl p-4">
+          <div class="flex items-center gap-2 text-brand-800 font-semibold text-sm mb-2">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            Blog Generated Successfully!
+          </div>
+          <p class="text-sm text-brand-700">${data.message}</p>
+          ${data.slug ? `<p class="text-xs text-brand-600 mt-1">Slug: <code class="bg-brand-100 px-1 rounded">${data.slug}</code></p>` : ''}
+          ${data.url ? `<a href="${data.url}" target="_blank" class="text-xs text-brand-700 underline mt-1 inline-block">View published blog &rarr;</a>` : ''}
+        </div>`;
+      toast('Blog generated successfully!');
+    } else {
+      result.innerHTML = `
+        <div class="bg-amber-50 border border-amber-200 rounded-xl p-4">
+          <div class="flex items-center gap-2 text-amber-800 font-semibold text-sm mb-1">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z"/></svg>
+            ${data.status === 'partial' ? 'Partially Complete' : 'Generation Issue'}
+          </div>
+          <p class="text-sm text-amber-700">${data.message}</p>
+        </div>`;
+      toast(data.message, 'info');
+    }
+  } catch (err) {
+    result.classList.remove('hidden');
+    result.innerHTML = `<div class="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">${err.message}</div>`;
+    toast('Error generating blog', 'error');
+  } finally {
+    btn.disabled = false; btn.classList.remove('opacity-50');
+    spinner.classList.add('hidden');
+    setStatus('System ready');
+  }
+}
+
+// ---- Load Blogs ----
+async function loadBlogs() {
+  const container = document.getElementById('blogs-list');
+  try {
+    const data = await apiGet('/api/blogs');
+    allBlogs = data.blogs || [];
+    if (!allBlogs.length) {
+      container.innerHTML = '<div class="p-12 text-center text-gray-400">No blogs found. Generate your first blog!</div>';
+      return;
+    }
+    container.innerHTML = `
+      <table class="w-full text-left">
+        <thead class="bg-gray-50 border-b border-gray-100">
+          <tr>
+            <th class="px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Title</th>
+            <th class="px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Category</th>
+            <th class="px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
+            <th class="px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Published</th>
+            <th class="px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Actions</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-50">
+          ${allBlogs.map(b => `
+            <tr class="blog-row cursor-pointer" onclick="viewBlog('${b.slug}')">
+              <td class="px-5 py-3.5">
+                <div class="font-medium text-sm text-gray-900 line-clamp-1">${esc(b.title)}</div>
+                <div class="text-xs text-gray-400 mt-0.5">${esc(b.slug)}</div>
+              </td>
+              <td class="px-5 py-3.5"><span class="text-xs font-medium bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">${esc(b.category || 'N/A')}</span></td>
+              <td class="px-5 py-3.5"><span class="text-xs font-medium ${b.status==='published'?'bg-brand-50 text-brand-700':'bg-amber-50 text-amber-700'} px-2 py-0.5 rounded-full">${esc(b.status)}</span></td>
+              <td class="px-5 py-3.5 text-xs text-gray-500">${b.published_at ? new Date(b.published_at).toLocaleDateString() : 'N/A'}</td>
+              <td class="px-5 py-3.5">
+                <div class="flex items-center gap-2" onclick="event.stopPropagation()">
+                  <button onclick="viewBlog('${b.slug}')" class="text-xs text-brand-600 hover:text-brand-700 font-medium">View</button>
+                  <button onclick="quickSocial('${b.slug}')" class="text-xs text-indigo-600 hover:text-indigo-700 font-medium">Social</button>
+                  <button onclick="quickWpSync('${b.slug}')" class="text-xs text-sky-600 hover:text-sky-700 font-medium">WP Sync</button>
+                </div>
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>`;
+    populateBlogSelects();
+  } catch (err) {
+    container.innerHTML = `<div class="p-8 text-center text-red-500 text-sm">${err.message}</div>`;
+  }
+}
+
+async function viewBlog(slug) {
+  const container = document.getElementById('blog-detail-content');
+  showSection('blog-detail');
+  container.innerHTML = '<div class="p-12 text-center text-gray-400"><span class="spinner"></span> Loading blog...</div>';
+  try {
+    const data = await apiGet('/api/blogs/' + slug);
+    const b = data.blog;
+    container.innerHTML = `
+      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+        <div class="p-6 border-b border-gray-100">
+          <div class="flex items-center gap-2 mb-3">
+            <span class="text-xs font-medium bg-brand-50 text-brand-700 px-2 py-0.5 rounded-full">${esc(b.category || '')}</span>
+            <span class="text-xs text-gray-400">${b.read_time || '?'} min read</span>
+            <span class="text-xs text-gray-400">${b.published_at ? new Date(b.published_at).toLocaleDateString() : ''}</span>
+          </div>
+          <h2 class="text-xl font-bold text-gray-900 mb-2">${esc(b.title)}</h2>
+          <p class="text-sm text-gray-500">${esc(b.meta_description || b.excerpt || '')}</p>
+          <div class="flex flex-wrap gap-1.5 mt-3">
+            ${(b.tags||[]).map(t => `<span class="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">${esc(t)}</span>`).join('')}
+          </div>
+        </div>
+        <div class="p-6">
+          <div class="flex gap-2 mb-5">
+            <button onclick="quickSocial('${b.slug}')" class="px-4 py-2 text-xs font-medium bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-lg transition">Generate Social Posts</button>
+            <button onclick="quickPodcast('${b.slug}')" class="px-4 py-2 text-xs font-medium bg-purple-50 text-purple-700 hover:bg-purple-100 rounded-lg transition">Generate Podcast</button>
+            <button onclick="quickWpSync('${b.slug}')" class="px-4 py-2 text-xs font-medium bg-sky-50 text-sky-700 hover:bg-sky-100 rounded-lg transition">Sync to WordPress</button>
+          </div>
+          <div class="prose prose-sm max-w-none text-gray-700">${b.content || '<p class="text-gray-400">No content available</p>'}</div>
+        </div>
+      </div>`;
+  } catch (err) {
+    container.innerHTML = `<div class="p-8 text-center text-red-500 text-sm">${err.message}</div>`;
+  }
+}
+
+// ---- Populate blog selects ----
+function populateBlogSelects() {
+  if (!allBlogs.length) {
+    apiGet('/api/blogs').then(d => { allBlogs = d.blogs || []; _fillSelects(); }).catch(()=>{});
+  } else {
+    _fillSelects();
+  }
+}
+function _fillSelects() {
+  ['social-blog-select','podcast-blog-select','wp-blog-select'].forEach(id => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    const hasEmpty = id === 'wp-blog-select';
+    sel.innerHTML = (hasEmpty ? '<option value="">Latest blog</option>' : '<option value="">-- Select a blog --</option>') +
+      allBlogs.map(b => `<option value="${esc(b.slug)}">${esc(b.title)} (${esc(b.slug)})</option>`).join('');
+  });
+}
+
+// ---- Social Posts ----
+async function generateSocialPosts() {
+  const slug = document.getElementById('social-blog-select').value;
+  if (!slug) { toast('Please select a blog', 'error'); return; }
+  const linkedin = document.getElementById('social-linkedin').checked;
+  const instagram = document.getElementById('social-instagram').checked;
+  const btn = document.getElementById('btn-social');
+  const spinner = document.getElementById('social-spinner');
+  const result = document.getElementById('social-result');
+
+  btn.disabled = true; btn.classList.add('opacity-50');
+  spinner.classList.remove('hidden');
+  result.classList.add('hidden');
+  setStatus('Generating social posts...');
+
+  try {
+    const data = await apiPost('/api/social-posts', { blog_slug: slug, include_linkedin: linkedin, include_instagram: instagram });
+    result.classList.remove('hidden');
+    let html = '';
+    if (data.linkedin?.generation?.status === 'success') {
+      const ld = data.linkedin.generation.data;
+      html += `<div class="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-3">
+        <div class="font-semibold text-sm text-blue-800 mb-2">LinkedIn Post</div>
+        <p class="text-sm text-blue-900 whitespace-pre-wrap">${esc(ld.content)}</p>
+        <div class="flex flex-wrap gap-1 mt-2">${(ld.hashtags||[]).map(h=>`<span class="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">#${esc(h)}</span>`).join('')}</div>
+        <div class="mt-2 text-xs text-blue-600">${data.linkedin.save?.status==='success'?'Saved to Supabase':'Not saved'}</div>
+      </div>`;
+    }
+    if (data.instagram?.generation?.status === 'success') {
+      const ig = data.instagram.generation.data;
+      html += `<div class="bg-pink-50 border border-pink-200 rounded-xl p-4">
+        <div class="font-semibold text-sm text-pink-800 mb-2">Instagram Post</div>
+        <p class="text-sm text-pink-900 whitespace-pre-wrap">${esc(ig.caption)}</p>
+        <div class="flex flex-wrap gap-1 mt-2">${(ig.hashtags||[]).map(h=>`<span class="text-xs bg-pink-100 text-pink-700 px-1.5 py-0.5 rounded">#${esc(h)}</span>`).join('')}</div>
+        <div class="mt-2 text-xs text-pink-600">${data.instagram.save?.status==='success'?'Saved to Supabase':'Not saved'}</div>
+      </div>`;
+    }
+    if (!html) html = '<div class="text-sm text-gray-500">No posts generated. Check the blog slug exists in Supabase.</div>';
+    result.innerHTML = html;
+    toast('Social posts generated!');
+  } catch (err) {
+    result.classList.remove('hidden');
+    result.innerHTML = `<div class="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">${err.message}</div>`;
+    toast('Error generating social posts', 'error');
+  } finally {
+    btn.disabled = false; btn.classList.remove('opacity-50');
+    spinner.classList.add('hidden');
+    setStatus('System ready');
+  }
+}
+
+function quickSocial(slug) {
+  showSection('social');
+  setTimeout(() => { document.getElementById('social-blog-select').value = slug; }, 300);
+}
+
+// ---- Podcast ----
+async function generatePodcast() {
+  const slug = document.getElementById('podcast-blog-select').value;
+  if (!slug) { toast('Please select a blog', 'error'); return; }
+  const btn = document.getElementById('btn-podcast');
+  const spinner = document.getElementById('podcast-spinner');
+  const result = document.getElementById('podcast-result');
+
+  btn.disabled = true; btn.classList.add('opacity-50');
+  spinner.classList.remove('hidden');
+  result.classList.add('hidden');
+  setStatus('Generating podcast...');
+
+  try {
+    const data = await apiPost('/api/podcast', { blog_slug: slug });
+    result.classList.remove('hidden');
+    if (data.status === 'success') {
+      result.innerHTML = `<div class="bg-purple-50 border border-purple-200 rounded-xl p-4">
+        <div class="font-semibold text-sm text-purple-800 mb-1">Podcast Generated!</div>
+        <p class="text-sm text-purple-700">${data.message || 'Podcast created successfully.'}</p>
+        ${data.audio_file ? `<p class="text-xs text-purple-600 mt-1">File: ${esc(data.audio_file)}</p>` : ''}
+      </div>`;
+      toast('Podcast generated!');
+    } else {
+      result.innerHTML = `<div class="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-700">${data.message || 'Podcast generation returned a non-success status.'}</div>`;
+    }
+  } catch (err) {
+    result.classList.remove('hidden');
+    result.innerHTML = `<div class="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">${err.message}</div>`;
+    toast('Error generating podcast', 'error');
+  } finally {
+    btn.disabled = false; btn.classList.remove('opacity-50');
+    spinner.classList.add('hidden');
+    setStatus('System ready');
+  }
+}
+
+function quickPodcast(slug) {
+  showSection('podcast');
+  setTimeout(() => { document.getElementById('podcast-blog-select').value = slug; }, 300);
+}
+
+// ---- WordPress Sync ----
+async function syncWordPress() {
+  const slug = document.getElementById('wp-blog-select').value;
+  const update = document.getElementById('wp-update').checked;
+  const btn = document.getElementById('btn-wp');
+  const spinner = document.getElementById('wp-spinner');
+  const result = document.getElementById('wp-result');
+
+  btn.disabled = true; btn.classList.add('opacity-50');
+  spinner.classList.remove('hidden');
+  result.classList.add('hidden');
+  setStatus('Syncing to WordPress...');
+
+  try {
+    const data = await apiPost('/api/wordpress-sync', { blog_slug: slug || null, update_existing: update });
+    result.classList.remove('hidden');
+    if (data.status === 'success') {
+      result.innerHTML = `<div class="bg-sky-50 border border-sky-200 rounded-xl p-4">
+        <div class="font-semibold text-sm text-sky-800 mb-1">Synced to WordPress!</div>
+        <p class="text-sm text-sky-700">${data.message}</p>
+        ${data.post_url ? `<a href="${data.post_url}" target="_blank" class="text-xs text-sky-700 underline mt-1 inline-block">View on WordPress &rarr;</a>` : ''}
+      </div>`;
+      toast('WordPress sync complete!');
+    } else {
+      result.innerHTML = `<div class="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-700">${data.message}</div>`;
+    }
+  } catch (err) {
+    result.classList.remove('hidden');
+    result.innerHTML = `<div class="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">${err.message}</div>`;
+    toast('Error syncing to WordPress', 'error');
+  } finally {
+    btn.disabled = false; btn.classList.remove('opacity-50');
+    spinner.classList.add('hidden');
+    setStatus('System ready');
+  }
+}
+
+function quickWpSync(slug) {
+  showSection('wordpress');
+  setTimeout(() => { document.getElementById('wp-blog-select').value = slug; }, 300);
+}
+
+// ---- Brand Context ----
+async function loadBrandContext() {
+  try {
+    const data = await apiGet('/api/brand-context');
+    document.getElementById('brand-content').value = data.content || '';
+  } catch (err) {
+    document.getElementById('brand-content').value = '';
+  }
+}
+async function saveBrandContext() {
+  const content = document.getElementById('brand-content').value;
+  const status = document.getElementById('brand-status');
+  try {
+    await apiPost('/api/brand-context', { content });
+    status.textContent = 'Saved!';
+    status.className = 'text-sm text-brand-600 font-medium';
+    toast('Brand context saved');
+    setTimeout(() => { status.textContent = ''; }, 3000);
+  } catch (err) {
+    status.textContent = 'Error saving';
+    status.className = 'text-sm text-red-600';
+    toast('Error saving brand context', 'error');
+  }
+}
+
+// ---- Settings ----
+async function loadSettings() {
+  const grid = document.getElementById('settings-grid');
+  try {
+    const s = await apiGet('/api/settings');
+    grid.innerHTML = `
+      ${settingCard('LLM Provider', s.has_openrouter ? 'OpenRouter' : (s.has_gemini ? 'Google Gemini' : 'Not configured'), s.has_openrouter || s.has_gemini, s.has_openrouter ? `Model: ${s.openrouter_model}` : (s.has_gemini ? `Model: ${s.gemini_model}` : 'Set OPENROUTER_API_KEY or GEMINI_API_KEY in .env'))}
+      ${settingCard('Supabase', s.has_supabase ? 'Connected' : 'Not configured', s.has_supabase, s.supabase_url || 'Set SUPABASE_URL in .env')}
+      ${settingCard('ElevenLabs', s.has_elevenlabs ? 'Connected' : 'Not configured', s.has_elevenlabs, s.has_elevenlabs ? 'Ready for podcast generation' : 'Set ELEVENLABS_API_KEY in .env')}
+      ${settingCard('WordPress', s.has_wordpress ? 'Connected' : 'Not configured', s.has_wordpress, s.wordpress_url || 'Set WORDPRESS_URL in .env')}
+    `;
+  } catch (err) {
+    grid.innerHTML = `<div class="col-span-2 p-8 text-center text-red-500 text-sm">${err.message}</div>`;
+  }
+}
+function settingCard(name, status, ok, detail) {
+  return `<div class="card bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+    <div class="flex items-center justify-between mb-2">
+      <span class="font-semibold text-sm text-gray-900">${name}</span>
+      <span class="flex items-center gap-1.5 text-xs font-medium ${ok?'text-brand-700':'text-gray-400'}">
+        <span class="w-2 h-2 rounded-full ${ok?'bg-brand-500':'bg-gray-300'}"></span>
+        ${status}
+      </span>
+    </div>
+    <p class="text-xs text-gray-500">${detail}</p>
+  </div>`;
+}
+
+// ---- Helpers ----
+function esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function setStatus(text) { document.getElementById('status-text').textContent = text; }
+
+// ---- Init ----
+document.addEventListener('DOMContentLoaded', () => {
+  showSection('generate');
+  apiGet('/api/health').then(() => setStatus('System ready')).catch(() => {
+    setStatus('Backend offline');
+    document.getElementById('status-dot').classList.replace('bg-brand-400','bg-red-400');
+  });
+});
+</script>
+</body>
+</html>

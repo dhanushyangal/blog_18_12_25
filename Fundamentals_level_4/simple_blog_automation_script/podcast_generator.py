@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 podcast_generator.py
 
@@ -9,7 +10,7 @@ Podcast generation from blog posts:
 - Stores podcast metadata and can update blog posts
 
 Place in: Fundamentals_level_4/simple_blog_automation_script/
-Required .env vars: SUPABASE_URL, SUPABASE_SERVICE_KEY, GEMINI_API_KEY, ELEVENLABS_API_KEY
+Required .env: SUPABASE_URL, SUPABASE_SERVICE_KEY, ELEVENLABS_API_KEY, and either OPENROUTER_API_KEY or GEMINI_API_KEY
 
 MP3 Audio Generation Process:
 1. Script Generation: Gemini AI creates a structured podcast script (intro, segments, outro)
@@ -22,6 +23,7 @@ The MP3 files are ready to use - no additional processing needed!
 """
 
 import os
+import sys
 import json
 import csv
 import re
@@ -31,8 +33,20 @@ from typing import Dict, List, Any, Optional
 from dotenv import load_dotenv
 from supabase import create_client, Client
 from slugify import slugify
-from google import genai
 from bs4 import BeautifulSoup
+
+from llm_client import generate_content, require_llm_config
+
+# Fix Windows console encoding for emoji support
+if sys.platform == 'win32':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except AttributeError:
+        # Python < 3.7 fallback
+        import codecs
+        sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'strict')
+        sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer, 'strict')
 
 # Load environment
 load_dotenv()
@@ -40,8 +54,6 @@ load_dotenv()
 # Environment variables
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "models/gemini-2.5-flash")
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")  # Default: Rachel voice
 ELEVENLABS_MODEL = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2")  # High quality, stable for long-form
@@ -49,11 +61,10 @@ ELEVENLABS_GUEST_VOICE_ID = os.getenv("ELEVENLABS_GUEST_VOICE_ID")  # Optional: 
 ELEVENLABS_PODCAST_MODE = os.getenv("ELEVENLABS_PODCAST_MODE", "bulletin")  # "bulletin" (monologue) or "conversation"
 
 # Validate
-if not all([GEMINI_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_KEY]):
-    raise ValueError("Missing required environment variables. Check .env: GEMINI_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_KEY")
+if not all([SUPABASE_URL, SUPABASE_SERVICE_KEY]):
+    raise ValueError("Missing required environment variables. Check .env: SUPABASE_URL, SUPABASE_SERVICE_KEY")
+require_llm_config()
 
-# Clients
-client_genai = genai.Client(api_key=GEMINI_API_KEY)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 # -------------------- Helpers --------------------
@@ -177,11 +188,9 @@ Make it natural, conversational, and easy to read aloud. Use the brand voice fro
 """
 
     try:
-        resp = client_genai.models.generate_content(model=GEMINI_MODEL, contents=prompt)
-        g_text = getattr(resp, 'text', None) or (resp.output[0].content if getattr(resp, 'output', None) else None)
-        
+        g_text = generate_content(prompt)
         if not g_text:
-            return {"status": "error", "message": "No content returned from Gemini"}
+            return {"status": "error", "message": "No content returned from LLM"}
         
         # Try to extract JSON from response
         json_match = re.search(r'\{.*\}', g_text, re.DOTALL)
@@ -315,7 +324,10 @@ def create_podcast_project_with_elevenlabs(blog_content: str, blog_title: str,
     else:
         # Bulletin mode (monologue)
         mode_config = {
-            "type": "bulletin"
+            "type": "bulletin",
+            "bulletin": {
+                "host_voice_id": voice_id
+            }
         }
     
     # Build request payload
@@ -350,9 +362,38 @@ def create_podcast_project_with_elevenlabs(blog_content: str, blog_title: str,
                 "message": f"Podcast project created successfully. Project ID: {project_id}"
             }
         else:
+            # Check for specific error types
+            error_text = response.text
+            try:
+                error_data = response.json()
+                error_detail = error_data.get('detail', {})
+                
+                # Check for whitelist/access errors
+                if response.status_code == 403:
+                    error_message = error_detail.get('message', '')
+                    if "invalid_subscription" in str(error_detail) or "whitelisted" in error_message.lower():
+                        return {
+                            "status": "error",
+                            "message": "Studio Podcasts API requires account whitelisting. Your account needs to be explicitly whitelisted by ElevenLabs sales team. Contact sales@elevenlabs.io to request access.",
+                            "error_type": "whitelist_required",
+                            "error_detail": error_detail
+                        }
+                
+                # Check for permission errors
+                if response.status_code == 401:
+                    if "missing_permissions" in str(error_detail) or "projects_write" in str(error_detail):
+                        return {
+                            "status": "error",
+                            "message": "API key is missing 'projects_write' permission for Studio Podcasts API",
+                            "error_type": "missing_permission",
+                            "error_detail": error_detail
+                        }
+            except:
+                pass
+            
             return {
                 "status": "error",
-                "message": f"ElevenLabs API error: {response.status_code} - {response.text}"
+                "message": f"ElevenLabs API error: {response.status_code} - {error_text}"
             }
     
     except Exception as e:
@@ -553,6 +594,23 @@ def generate_audio_with_elevenlabs(text: str, voice_id: str = None, model: str =
                 if response.status_code == 200:
                     audio_parts.append(response.content)
                 else:
+                    error_text = response.text
+                    try:
+                        error_data = response.json()
+                        error_detail = error_data.get('detail', {})
+                        error_message = error_detail.get('message', error_text)
+                        
+                        # Check for quota errors
+                        if "quota_exceeded" in str(error_detail) or "quota" in error_message.lower():
+                            return {
+                                "status": "error",
+                                "message": f"ElevenLabs quota exceeded: {error_message}",
+                                "error_type": "quota_exceeded",
+                                "error_detail": error_detail
+                            }
+                    except:
+                        pass
+                    
                     return {
                         "status": "error",
                         "message": f"ElevenLabs API error (chunk {i+1}): {response.status_code} - {response.text}"
@@ -589,6 +647,23 @@ def generate_audio_with_elevenlabs(text: str, voice_id: str = None, model: str =
                     "message": "Audio generated successfully"
                 }
             else:
+                error_text = response.text
+                try:
+                    error_data = response.json()
+                    error_detail = error_data.get('detail', {})
+                    error_message = error_detail.get('message', error_text)
+                    
+                    # Check for quota errors
+                    if "quota_exceeded" in str(error_detail) or "quota" in error_message.lower():
+                        return {
+                            "status": "error",
+                            "message": f"ElevenLabs quota exceeded: {error_message}",
+                            "error_type": "quota_exceeded",
+                            "error_detail": error_detail
+                        }
+                except:
+                    pass
+                
                 return {
                     "status": "error",
                     "message": f"ElevenLabs API error: {response.status_code} - {response.text}"
@@ -600,6 +675,311 @@ def generate_audio_with_elevenlabs(text: str, voice_id: str = None, model: str =
             "message": f"Error generating audio: {str(e)}"
         }
 
+def generate_audio_from_script_file(script_filepath: str, blog_slug: str = None,
+                                    voice_id: str = None, model: str = None) -> Dict[str, Any]:
+    """
+    Generate podcast audio from an existing script file (bypasses Gemini generation).
+    
+    Args:
+        script_filepath: Path to the existing script .txt file
+        blog_slug: Blog slug for output filename (optional, extracted from script if not provided)
+        voice_id: Optional voice ID override
+        model: Optional model override
+    
+    Returns:
+        Dict with 'status', 'audio_filepath', 'script_filepath', and 'message'
+    """
+    if not ELEVENLABS_API_KEY:
+        return {
+            "status": "error",
+            "message": "ELEVENLABS_API_KEY not found. Audio generation skipped."
+        }
+    
+    if not os.path.exists(script_filepath):
+        return {
+            "status": "error",
+            "message": f"Script file not found: {script_filepath}"
+        }
+    
+    print(f"📖 Reading script from: {script_filepath}")
+    
+    try:
+        with open(script_filepath, 'r', encoding='utf-8') as f:
+            script_content = f.read()
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error reading script file: {str(e)}"
+        }
+    
+    # Parse script to extract audio content
+    # Look for INTRO, SEGMENT, and OUTRO sections
+    # Handle both formats: "INTRO:\n---\n" and "INTRO\n---\n"
+    intro_match = re.search(r'INTRO:?\s*\n-{3,}\s*\n(.*?)(?=\n\nSEGMENT|\n\nKEY TAKEAWAYS|\n\nOUTRO|$)', script_content, re.DOTALL | re.IGNORECASE)
+    outro_match = re.search(r'OUTRO:?\s*\n-{3,}\s*\n(.*?)(?=\n\nSHOW NOTES|$)', script_content, re.DOTALL | re.IGNORECASE)
+    
+    # Extract segments - handle format: "SEGMENT 1: Title\n---\ncontent"
+    segments = []
+    segment_pattern = r'SEGMENT\s+(\d+):?\s+([^\n]+)\s*\n-{3,}\s*\n(.*?)(?=\n\nSEGMENT|\n\nKEY TAKEAWAYS|\n\nOUTRO|$)'
+    for match in re.finditer(segment_pattern, script_content, re.DOTALL | re.IGNORECASE):
+        segment_num = match.group(1)
+        segment_title = match.group(2).strip()
+        segment_content = match.group(3).strip()
+        segments.append({
+            'number': segment_num,
+            'title': segment_title,
+            'content': segment_content
+        })
+    
+    # Combine script parts for audio
+    audio_parts = []
+    
+    if intro_match:
+        intro = intro_match.group(1).strip()
+        audio_parts.append(intro)
+    
+    # Add segments in order
+    for segment in sorted(segments, key=lambda x: int(x['number'])):
+        audio_parts.append(segment['content'])
+    
+    if outro_match:
+        outro = outro_match.group(1).strip()
+        audio_parts.append(outro)
+    
+    if not audio_parts:
+        # Fallback: try to extract everything between INTRO and SHOW NOTES
+        fallback_match = re.search(r'INTRO:?\s*\n-+\s*\n(.*?)(?=\n\nSHOW NOTES|$)', script_content, re.DOTALL | re.IGNORECASE)
+        if fallback_match:
+            full_text = fallback_match.group(1).strip()
+            # Remove segment headers
+            full_text = re.sub(r'SEGMENT\s+\d+:?\s+[^\n]+\s*\n-+\s*\n', '\n\n', full_text)
+            audio_parts = [full_text]
+    
+    if not audio_parts or not any(part.strip() for part in audio_parts):
+        return {
+            "status": "error",
+            "message": "Could not extract script content from file. Make sure it has INTRO, SEGMENT, and OUTRO sections."
+        }
+    
+    # Combine all parts
+    full_script = "\n\n".join(audio_parts)
+    
+    # Extract blog slug from filename if not provided
+    if not blog_slug:
+        filename = os.path.basename(script_filepath)
+        # Try to extract slug from filename (e.g., podcast_slug_timestamp.txt)
+        slug_match = re.search(r'podcast_([^_]+(?:_[^_]+)*)_\d{8}_\d{6}', filename)
+        if slug_match:
+            blog_slug = slug_match.group(1)
+        else:
+            # Fallback: use filename without extension
+            blog_slug = os.path.splitext(filename)[0]
+    
+    # Check script length
+    script_length = len(full_script)
+    estimated_credits = script_length
+    
+    print(f"📊 Script length: {script_length:,} characters")
+    print(f"💰 Estimated credits needed: ~{estimated_credits:,}")
+    print(f"🎙️  Converting script to audio with Text-to-Speech API...")
+    
+    # Generate audio using TTS API
+    audio_result = generate_audio_with_elevenlabs(full_script, voice_id, model)
+    
+    if audio_result.get('status') != 'success':
+        # If quota error, provide helpful message
+        if audio_result.get('error_type') == 'quota_exceeded':
+            error_detail = audio_result.get('error_detail', {})
+            error_message = error_detail.get('message', 'Quota exceeded')
+            print(f"\n⚠️  QUOTA EXCEEDED:")
+            print(f"   {error_message}")
+            print(f"\n💡 Solutions:")
+            print(f"   1. Wait for your quota to reset (usually monthly)")
+            print(f"   2. Upgrade your ElevenLabs plan for more credits")
+            print(f"   3. Edit the script file to shorten it: {script_filepath}")
+            print(f"      Then run this command again")
+        
+        return {
+            "status": "error",
+            "message": audio_result.get('message'),
+            "script_filepath": script_filepath,
+            "error_type": audio_result.get('error_type')
+        }
+    
+    # Save audio file
+    os.makedirs('generated_podcasts', exist_ok=True)
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    audio_filename = f"podcast_{blog_slug}_{timestamp}.mp3"
+    audio_filepath = os.path.join('generated_podcasts', audio_filename)
+    
+    with open(audio_filepath, 'wb') as f:
+        f.write(audio_result['audio_data'])
+    
+    print(f"✅ Audio saved: {audio_filepath}")
+    
+    return {
+        "status": "success",
+        "audio_filepath": audio_filepath,
+        "script_filepath": script_filepath,
+        "message": "Podcast audio generated successfully from script file",
+        "method": "tts_from_file"
+    }
+
+def generate_podcast_audio_with_tts(blog_content: str, blog_title: str, blog_excerpt: str,
+                                    blog_slug: str, brand_context: str = None,
+                                    voice_id: str = None, 
+                                    model: str = None,
+                                    duration_minutes: int = 15) -> Dict[str, Any]:
+    """
+    Generate podcast audio using Text-to-Speech API (fallback when Studio API is not available).
+    First generates a script using Gemini, then converts to audio using TTS API.
+    
+    Args:
+        blog_content: Full blog content text
+        blog_title: Blog title
+        blog_excerpt: Blog excerpt
+        blog_slug: Blog slug for filename
+        brand_context: Brand context for script generation
+        voice_id: Optional voice ID override
+        model: Optional model override
+        duration_minutes: Target duration in minutes
+    
+    Returns:
+        Dict with 'status', 'audio_filepath', and 'message'
+    """
+    if not ELEVENLABS_API_KEY:
+        return {
+            "status": "error",
+            "message": "ELEVENLABS_API_KEY not found. Audio generation skipped."
+        }
+    
+    print(f"📝 Step 1: Generating podcast script with Gemini...")
+    
+    # Generate script first
+    if not brand_context:
+        brand_context = load_brand_context()
+    
+    script_data = generate_podcast_script(
+        blog_title, blog_content, blog_excerpt, brand_context, duration_minutes
+    )
+    
+    if script_data.get('status') != 'success':
+        return {
+            "status": "error",
+            "message": f"Failed to generate script: {script_data.get('message', 'Unknown error')}"
+        }
+    
+    print(f"✅ Script generated successfully!")
+    
+    # Save script to file
+    os.makedirs('generated_podcasts', exist_ok=True)
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    script_filename = f"podcast_{blog_slug}_{timestamp}.txt"
+    script_filepath = os.path.join('generated_podcasts', script_filename)
+    
+    # Combine script parts for saving
+    full_script_parts = []
+    
+    # Add intro
+    intro = script_data.get('intro', '')
+    if intro:
+        full_script_parts.append(f"=== INTRO ===\n{intro}")
+    
+    # Add segments
+    segments = script_data.get('segments', [])
+    for i, segment in enumerate(segments, 1):
+        title = segment.get('title', f'Segment {i}')
+        content = segment.get('content', '')
+        if content:
+            full_script_parts.append(f"\n=== SEGMENT {i}: {title} ===\n{content}")
+    
+    # Add outro
+    outro = script_data.get('outro', '')
+    if outro:
+        full_script_parts.append(f"\n=== OUTRO ===\n{outro}")
+    
+    # Add metadata
+    metadata = []
+    if script_data.get('key_points'):
+        metadata.append(f"\n=== KEY POINTS ===\n" + "\n".join(f"- {point}" for point in script_data.get('key_points', [])))
+    if script_data.get('show_notes'):
+        metadata.append(f"\n=== SHOW NOTES ===\n{script_data.get('show_notes', '')}")
+    if script_data.get('total_duration_estimate'):
+        metadata.append(f"\n=== DURATION ESTIMATE ===\n{script_data.get('total_duration_estimate', '')}")
+    
+    # Combine all parts
+    full_script_text = "\n\n".join(full_script_parts + metadata)
+    
+    # Save script to file
+    with open(script_filepath, 'w', encoding='utf-8') as f:
+        f.write(f"PODCAST SCRIPT: {blog_title}\n")
+        f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write("=" * 80 + "\n\n")
+        f.write(full_script_text)
+    
+    print(f"📄 Script saved: {script_filepath}")
+    
+    # Prepare script for audio (without metadata)
+    full_script = "\n\n".join([intro] + [seg.get('content', '') for seg in segments if seg.get('content')] + [outro])
+    
+    if not full_script.strip():
+        return {
+            "status": "error",
+            "message": "No script content to convert to audio"
+        }
+    
+    # Check script length and estimate credits needed
+    script_length = len(full_script)
+    # ElevenLabs charges ~1 credit per character (rough estimate)
+    estimated_credits = script_length
+    
+    print(f"📊 Script length: {script_length:,} characters")
+    print(f"💰 Estimated credits needed: ~{estimated_credits:,}")
+    print(f"🎙️  Step 2: Converting script to audio with Text-to-Speech API...")
+    
+    # Generate audio using TTS API
+    audio_result = generate_audio_with_elevenlabs(full_script, voice_id, model)
+    
+    if audio_result.get('status') != 'success':
+        # If quota error, provide helpful message
+        if audio_result.get('error_type') == 'quota_exceeded':
+            error_detail = audio_result.get('error_detail', {})
+            error_message = error_detail.get('message', 'Quota exceeded')
+            print(f"\n⚠️  QUOTA EXCEEDED:")
+            print(f"   {error_message}")
+            print(f"\n💡 Solutions:")
+            print(f"   1. Wait for your quota to reset (usually monthly)")
+            print(f"   2. Upgrade your ElevenLabs plan for more credits")
+            print(f"   3. Reduce script length by using a shorter duration")
+            print(f"   4. The script has been saved to: {script_filepath}")
+            print(f"      You can manually edit it to shorten it, then try again")
+        
+        return {
+            "status": "error",
+            "message": audio_result.get('message'),
+            "script_filepath": script_filepath,
+            "error_type": audio_result.get('error_type')
+        }
+    
+    # Save audio file
+    os.makedirs('generated_podcasts', exist_ok=True)
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    audio_filename = f"podcast_{blog_slug}_{timestamp}.mp3"
+    audio_filepath = os.path.join('generated_podcasts', audio_filename)
+    
+    with open(audio_filepath, 'wb') as f:
+        f.write(audio_result['audio_data'])
+    
+    print(f"✅ Audio saved: {audio_filepath}")
+    
+    return {
+        "status": "success",
+        "audio_filepath": audio_filepath,
+        "script_filepath": script_filepath,
+        "message": "Podcast audio generated successfully using Text-to-Speech API",
+        "method": "tts_fallback"
+    }
+
 def generate_podcast_audio(blog_content: str, blog_title: str, blog_excerpt: str,
                            blog_slug: str, 
                            voice_id: str = None, 
@@ -608,7 +988,8 @@ def generate_podcast_audio(blog_content: str, blog_title: str, blog_excerpt: str
                            mode: str = None,
                            quality_preset: str = "standard",
                            duration_scale: str = "default",
-                           max_wait_seconds: int = 300) -> Dict[str, Any]:
+                           max_wait_seconds: int = 300,
+                           use_tts_fallback: bool = False) -> Dict[str, Any]:
     """
     Generate complete podcast audio using ElevenLabs Studio Podcasts API.
     
@@ -624,6 +1005,7 @@ def generate_podcast_audio(blog_content: str, blog_title: str, blog_excerpt: str
         quality_preset: "standard", "high", "ultra", "ultra_lossless"
         duration_scale: "short", "default", "long"
         max_wait_seconds: Maximum time to wait for conversion (default 5 minutes)
+        use_tts_fallback: If True, use TTS API directly instead of Studio API
     
     Returns:
         Dict with 'status', 'audio_filepath', 'project_id', and 'message'
@@ -633,6 +1015,20 @@ def generate_podcast_audio(blog_content: str, blog_title: str, blog_excerpt: str
             "status": "error",
             "message": "ELEVENLABS_API_KEY not found. Audio generation skipped."
         }
+    
+    # If TTS fallback is requested, use that instead
+    if use_tts_fallback:
+        print(f"🎙️  Using Text-to-Speech API (fallback mode)...")
+        brand_context = load_brand_context()
+        return generate_podcast_audio_with_tts(
+            blog_content=blog_content,
+            blog_title=blog_title,
+            blog_excerpt=blog_excerpt,
+            blog_slug=blog_slug,
+            brand_context=brand_context,
+            voice_id=voice_id,
+            model=model
+        )
     
     print(f"🎙️  Creating podcast project with ElevenLabs Studio API...")
     
@@ -659,6 +1055,24 @@ def generate_podcast_audio(blog_content: str, blog_title: str, blog_excerpt: str
     )
     
     if project_result.get('status') != 'success':
+        # Check if it's a whitelist error - automatically fallback to TTS
+        error_type = project_result.get('error_type')
+        if error_type == "whitelist_required":
+            print(f"\n⚠️  Studio API not available (whitelist required).")
+            print(f"🔄 Automatically falling back to Text-to-Speech API...")
+            print(f"   (This will generate a script first, then convert to audio)")
+            
+            brand_context = load_brand_context()
+            return generate_podcast_audio_with_tts(
+                blog_content=blog_content,
+                blog_title=blog_title,
+                blog_excerpt=blog_excerpt,
+                blog_slug=blog_slug,
+                brand_context=brand_context,
+                voice_id=voice_id,
+                model=model
+            )
+        
         return project_result
     
     project_id = project_result.get('project_id')
@@ -811,10 +1225,25 @@ def create_podcast_from_csv(csv_path: str, duration_minutes: int = 15) -> Dict[s
         print(f"\n💡 Your MP3 podcast is ready to use!")
     else:
         error_msg = audio_result.get('message', 'Unknown error')
+        error_type = audio_result.get('error_type')
+        
         print(f"\n❌ Audio generation failed: {error_msg}")
         
-        # Check if it's a permission error
-        if "missing_permissions" in error_msg or "projects_write" in error_msg:
+        # Show helpful messages for specific error types
+        if error_type == "whitelist_required" or "whitelisted" in error_msg.lower() or "invalid_subscription" in error_msg:
+            print(f"\n⚠️  WHITELIST REQUIRED:")
+            print(f"   The Studio Podcasts API is currently in beta/whitelist-only access.")
+            print(f"   Your account needs to be explicitly whitelisted by ElevenLabs.")
+            print(f"\n💡 Options:")
+            print(f"   Option A - Get Studio API access:")
+            print(f"   1. Contact ElevenLabs sales team to request Studio API access")
+            print(f"   2. Visit: https://elevenlabs.io/contact or email sales@elevenlabs.io")
+            print(f"   3. Mention you need access to the Studio Podcasts API")
+            print(f"   4. Once whitelisted, your existing API key will work")
+            print(f"\n   Option B - Use Text-to-Speech API (works now):")
+            print(f"   The code will automatically fallback to TTS API when Studio API fails.")
+            print(f"   Or use option 5 in the menu to use TTS directly.")
+        elif error_type == "missing_permission" or "missing_permissions" in error_msg or "projects_write" in error_msg:
             print(f"\n⚠️  PERMISSION ERROR DETECTED:")
             print(f"   Your API key doesn't have 'projects_write' permission for Studio Podcasts API.")
             print(f"\n💡 To fix this:")
@@ -883,10 +1312,25 @@ def create_podcast_from_slug(slug: str, duration_minutes: int = 15) -> Dict[str,
         print(f"\n💡 Your MP3 podcast is ready to use!")
     else:
         error_msg = audio_result.get('message', 'Unknown error')
+        error_type = audio_result.get('error_type')
+        
         print(f"\n❌ Audio generation failed: {error_msg}")
         
-        # Check if it's a permission error
-        if "missing_permissions" in error_msg or "projects_write" in error_msg:
+        # Show helpful messages for specific error types
+        if error_type == "whitelist_required" or "whitelisted" in error_msg.lower() or "invalid_subscription" in error_msg:
+            print(f"\n⚠️  WHITELIST REQUIRED:")
+            print(f"   The Studio Podcasts API is currently in beta/whitelist-only access.")
+            print(f"   Your account needs to be explicitly whitelisted by ElevenLabs.")
+            print(f"\n💡 Options:")
+            print(f"   Option A - Get Studio API access:")
+            print(f"   1. Contact ElevenLabs sales team to request Studio API access")
+            print(f"   2. Visit: https://elevenlabs.io/contact or email sales@elevenlabs.io")
+            print(f"   3. Mention you need access to the Studio Podcasts API")
+            print(f"   4. Once whitelisted, your existing API key will work")
+            print(f"\n   Option B - Use Text-to-Speech API (works now):")
+            print(f"   The code will automatically fallback to TTS API when Studio API fails.")
+            print(f"   Or use option 5 in the menu to use TTS directly.")
+        elif error_type == "missing_permission" or "missing_permissions" in error_msg or "projects_write" in error_msg:
             print(f"\n⚠️  PERMISSION ERROR DETECTED:")
             print(f"   Your API key doesn't have 'projects_write' permission for Studio Podcasts API.")
             print(f"\n💡 To fix this:")
@@ -943,7 +1387,12 @@ def check_elevenlabs_api_permissions() -> Dict[str, Any]:
             test_url = "https://api.elevenlabs.io/v1/studio/podcasts"
             test_payload = {
                 "model_id": "eleven_multilingual_v2",
-                "mode": {"type": "bulletin"},
+                "mode": {
+                    "type": "bulletin",
+                    "bulletin": {
+                        "host_voice_id": ELEVENLABS_VOICE_ID
+                    }
+                },
                 "source": {
                     "type": "text",
                     "text": "Test"
@@ -989,6 +1438,28 @@ def check_elevenlabs_api_permissions() -> Dict[str, Any]:
                         "message": f"API authentication error: {error_detail}",
                         "permissions": []
                     }
+            elif test_response.status_code == 403:
+                error_data = test_response.json()
+                error_detail = error_data.get('detail', {})
+                error_message = error_detail.get('message', '')
+                
+                if "invalid_subscription" in str(error_detail) or "whitelisted" in error_message.lower():
+                    return {
+                        "status": "success",
+                        "has_permission": False,
+                        "message": "Studio Podcasts API requires account whitelisting. Your account needs to be explicitly whitelisted by ElevenLabs sales team.",
+                        "permissions": [],
+                        "error": error_detail,
+                        "requires_whitelist": True
+                    }
+                else:
+                    return {
+                        "status": "error",
+                        "has_permission": False,
+                        "message": f"API access denied (403): {error_message}",
+                        "permissions": [],
+                        "error": error_detail
+                    }
             else:
                 return {
                     "status": "error",
@@ -1010,7 +1481,7 @@ def check_elevenlabs_api_permissions() -> Dict[str, Any]:
             "has_permission": False,
             "message": f"Error checking permissions: {str(e)}",
             "permissions": []
-        }
+    }
 
 # -------------------- Main CLI --------------------
 
@@ -1036,14 +1507,25 @@ def main():
                     print(f"\n   Permissions: {', '.join(permission_result.get('permissions', []))}")
                     print("\n💡 You can now use the Studio Podcasts API to generate podcasts.")
                 else:
-                    print("❌ PERMISSION ERROR: Your API key is missing required permissions!")
+                    print("❌ ACCESS ERROR: Your account doesn't have access to Studio Podcasts API!")
                     print(f"   {permission_result.get('message')}")
-                    print("\n💡 To fix this:")
-                    print("   1. Go to: https://elevenlabs.io/app/settings/api-keys")
-                    print("   2. Check your ElevenLabs plan - Studio Podcasts API requires Creator or Pro plan")
-                    print("   3. Create a new API key with proper permissions")
-                    print("   4. Update ELEVENLABS_API_KEY in your .env file")
-                    print("\n   Or upgrade your plan at: https://elevenlabs.io/pricing")
+                    
+                    if permission_result.get('requires_whitelist'):
+                        print("\n⚠️  WHITELIST REQUIRED:")
+                        print("   The Studio Podcasts API is currently in beta/whitelist-only access.")
+                        print("   Your account needs to be explicitly whitelisted by ElevenLabs.")
+                        print("\n💡 To get access:")
+                        print("   1. Contact ElevenLabs sales team to request Studio API access")
+                        print("   2. Visit: https://elevenlabs.io/contact or email sales@elevenlabs.io")
+                        print("   3. Mention you need access to the Studio Podcasts API")
+                        print("   4. Once whitelisted, your existing API key will work")
+                    else:
+                        print("\n💡 To fix this:")
+                        print("   1. Go to: https://elevenlabs.io/app/settings/api-keys")
+                        print("   2. Check your ElevenLabs plan - Studio Podcasts API requires Creator or Pro plan")
+                        print("   3. Create a new API key with proper permissions")
+                        print("   4. Update ELEVENLABS_API_KEY in your .env file")
+                        print("\n   Or upgrade your plan at: https://elevenlabs.io/pricing")
             else:
                 print(f"❌ Error checking permissions: {permission_result.get('message')}")
             
@@ -1070,13 +1552,15 @@ def main():
     
     # Interactive mode
     print("\nSelect source:")
-    print("1. From CSV file")
-    print("2. From Supabase (by slug)")
+    print("1. From CSV file (Studio API)")
+    print("2. From Supabase (by slug) (Studio API)")
     print("3. List available blogs")
     print("4. Check API key permissions")
+    print("5. Generate podcast using Text-to-Speech API (works without whitelist)")
+    print("6. Generate audio from existing script file (bypass Gemini)")
     
     try:
-        choice = input("\nEnter choice (1-4): ").strip()
+        choice = input("\nEnter choice (1-6): ").strip()
         
         if choice == '1':
             csv_path = input("Enter CSV file path: ").strip()
@@ -1146,18 +1630,158 @@ def main():
                     print(f"\n   Permissions: {', '.join(permission_result.get('permissions', []))}")
                     print("\n💡 You can now use the Studio Podcasts API to generate podcasts.")
                 else:
-                    print("❌ PERMISSION ERROR: Your API key is missing required permissions!")
+                    print("❌ ACCESS ERROR: Your account doesn't have access to Studio Podcasts API!")
                     print(f"   {permission_result.get('message')}")
-                    print("\n💡 To fix this:")
-                    print("   1. Go to: https://elevenlabs.io/app/settings/api-keys")
-                    print("   2. Check your ElevenLabs plan - Studio Podcasts API requires Creator or Pro plan")
-                    print("   3. Create a new API key with proper permissions")
-                    print("   4. Update ELEVENLABS_API_KEY in your .env file")
-                    print("\n   Or upgrade your plan at: https://elevenlabs.io/pricing")
+                    
+                    if permission_result.get('requires_whitelist'):
+                        print("\n⚠️  WHITELIST REQUIRED:")
+                        print("   The Studio Podcasts API is currently in beta/whitelist-only access.")
+                        print("   Your account needs to be explicitly whitelisted by ElevenLabs.")
+                        print("\n💡 To get access:")
+                        print("   1. Contact ElevenLabs sales team to request Studio API access")
+                        print("   2. Visit: https://elevenlabs.io/contact or email sales@elevenlabs.io")
+                        print("   3. Mention you need access to the Studio Podcasts API")
+                        print("   4. Once whitelisted, your existing API key will work")
+                    else:
+                        print("\n💡 To fix this:")
+                        print("   1. Go to: https://elevenlabs.io/app/settings/api-keys")
+                        print("   2. Check your ElevenLabs plan - Studio Podcasts API requires Creator or Pro plan")
+                        print("   3. Create a new API key with proper permissions")
+                        print("   4. Update ELEVENLABS_API_KEY in your .env file")
+                        print("\n   Or upgrade your plan at: https://elevenlabs.io/pricing")
             else:
                 print(f"❌ Error checking permissions: {permission_result.get('message')}")
             
             return 0 if permission_result.get('has_permission') else 1
+        
+        elif choice == '5':
+            # Use TTS API directly
+            blogs = list_available_blogs()
+            if not blogs:
+                print("\n❌ No blog CSV files found")
+                return 1
+            
+            print(f"\n📚 Found {len(blogs)} blog(s):\n")
+            for i, blog in enumerate(blogs, 1):
+                print(f"{i}. {blog['filename']}")
+                print(f"   Slug: {blog['slug']}")
+            
+            selection = input(f"\nSelect blog (1-{len(blogs)}) or enter slug: ").strip()
+            
+            try:
+                idx = int(selection) - 1
+                if 0 <= idx < len(blogs):
+                    csv_path = blogs[idx]['path']
+                else:
+                    print("❌ Invalid selection")
+                    return 1
+            except ValueError:
+                # Treat as slug - fetch from Supabase
+                blog_data = fetch_blog_from_supabase(selection)
+                if not blog_data:
+                    print(f"❌ Blog with slug '{selection}' not found")
+                    return 1
+                
+                blog_title = blog_data.get('title', '')
+                blog_content = blog_data.get('content', '')
+                blog_excerpt = blog_data.get('excerpt', '')
+                blog_slug = blog_data.get('slug', selection)
+                
+                print(f"📝 Blog: {blog_title}")
+                print(f"\n🎙️  Generating podcast using Text-to-Speech API...")
+                
+                brand_context = load_brand_context()
+                plain_blog_text = extract_text_from_html(blog_content)
+                
+                audio_result = generate_podcast_audio_with_tts(
+                    blog_content=plain_blog_text,
+                    blog_title=blog_title,
+                    blog_excerpt=blog_excerpt,
+                    blog_slug=blog_slug,
+                    brand_context=brand_context
+                )
+                
+                if audio_result.get('status') == 'success':
+                    print(f"\n✅ Podcast audio generated successfully!")
+                    print(f"   📁 Audio file: {audio_result.get('audio_filepath')}")
+                    if audio_result.get('script_filepath'):
+                        print(f"   📄 Script file: {audio_result.get('script_filepath')}")
+                    return 0
+                else:
+                    print(f"\n❌ Error: {audio_result.get('message')}")
+                    if audio_result.get('script_filepath'):
+                        print(f"   📄 Script saved to: {audio_result.get('script_filepath')}")
+                        print(f"   💡 You can review/edit the script and try again")
+                    return 1
+            
+            # Read from CSV
+            blog_data = read_blog_from_csv(csv_path)
+            if not blog_data:
+                print("❌ Could not read blog data from CSV")
+                return 1
+            
+            blog_title = blog_data.get('title', '')
+            blog_content = blog_data.get('content', '')
+            blog_excerpt = blog_data.get('excerpt', '')
+            blog_slug = blog_data.get('slug', '')
+            
+            print(f"📝 Blog: {blog_title}")
+            print(f"\n🎙️  Generating podcast using Text-to-Speech API...")
+            
+            brand_context = load_brand_context()
+            plain_blog_text = extract_text_from_html(blog_content)
+            
+            audio_result = generate_podcast_audio_with_tts(
+                blog_content=plain_blog_text,
+                blog_title=blog_title,
+                blog_excerpt=blog_excerpt,
+                blog_slug=blog_slug,
+                brand_context=brand_context
+            )
+            
+            if audio_result.get('status') == 'success':
+                print(f"\n✅ Podcast audio generated successfully!")
+                print(f"   📁 Audio file: {audio_result.get('audio_filepath')}")
+                if audio_result.get('script_filepath'):
+                    print(f"   📄 Script file: {audio_result.get('script_filepath')}")
+                return 0
+            else:
+                print(f"\n❌ Error: {audio_result.get('message')}")
+                if audio_result.get('script_filepath'):
+                    print(f"   📄 Script saved to: {audio_result.get('script_filepath')}")
+                    print(f"   💡 You can review/edit the script and try again")
+                return 1
+        
+        elif choice == '6':
+            # Generate audio from existing script file
+            script_path = input("Enter path to script file (.txt): ").strip()
+            if not script_path:
+                print("❌ No script file path provided")
+                return 1
+            
+            if not script_path.endswith('.txt'):
+                print("⚠️  Warning: File doesn't end with .txt, continuing anyway...")
+            
+            # Extract blog slug from filename if possible
+            filename = os.path.basename(script_path)
+            slug_match = re.search(r'podcast_([^_]+(?:_[^_]+)*)_\d{8}_\d{6}', filename) or re.search(r'notebooklm_([^_]+(?:_[^_]+)*)_\d{8}_\d{6}', filename)
+            blog_slug = slug_match.group(1) if slug_match else None
+            
+            audio_result = generate_audio_from_script_file(
+                script_filepath=script_path,
+                blog_slug=blog_slug
+            )
+            
+            if audio_result.get('status') == 'success':
+                print(f"\n✅ Podcast audio generated successfully!")
+                print(f"   📁 Audio file: {audio_result.get('audio_filepath')}")
+                print(f"   📄 Script file: {audio_result.get('script_filepath')}")
+                return 0
+            else:
+                print(f"\n❌ Error: {audio_result.get('message')}")
+                if audio_result.get('script_filepath'):
+                    print(f"   📄 Script file: {audio_result.get('script_filepath')}")
+                return 1
         
         else:
             print("❌ Invalid choice")
