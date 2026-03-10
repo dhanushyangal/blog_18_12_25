@@ -254,6 +254,8 @@ def sync_blog_to_wordpress(blog: Dict[str, Any], update_existing: bool = False) 
             if media_id:
                 wp_post_data['featured_media'] = media_id
         
+
+        
         # Handle category
         category = blog.get('category', '')
         if category:
